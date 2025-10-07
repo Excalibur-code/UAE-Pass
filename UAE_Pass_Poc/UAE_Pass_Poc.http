@@ -1,0 +1,6 @@
+@UAE_Pass_Poc_HostAddress = http://localhost:5064
+
+GET {{UAE_Pass_Poc_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
