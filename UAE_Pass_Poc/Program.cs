@@ -41,14 +41,6 @@ builder.Services.AddControllers(c =>
 });
 
 //Add Services in DI container
-builder.Services.AddDbContext<UaePassDbContext>(options =>
-{
-    var connectionString = builder.Configuration.GetValue<string>("ConnectionString:DbConnection");
-    options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString), options =>
-    {
-        options.EnableRetryOnFailure(3, TimeSpan.FromSeconds(2), null);
-    });
-});
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddScoped<ICadesVerificationService, CadesVerificationService>();
 builder.Services.AddScoped<IPresentationProcessingService, PresentationProcessingService>();

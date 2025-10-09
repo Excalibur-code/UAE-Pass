@@ -2,7 +2,7 @@ using UAE_Pass_Poc.Enums;
 
 namespace UAE_Pass_Poc.Entities;
 
-public class RequestPresentation
+public class RequestPresentation : Entity
 {
     public string PurposeEN { get; set; } = string.Empty;
     public string PurposeAR { get; set; } = string.Empty;
@@ -12,5 +12,5 @@ public class RequestPresentation
     public DateTime ExpiryDate { get; set; }
     public RequestOrigin Origin { get; set; } = RequestOrigin.WEB;
     public string RequestedVerifiedAttributes { get; set; } = string.Empty; //comma ',' seperated attributes.
-    public virtual IEnumerable<Document> RequestedDocuments { get; set; } = null!;
+    public virtual ICollection<Document> RequestedDocuments { get; set; } = null!;
 }

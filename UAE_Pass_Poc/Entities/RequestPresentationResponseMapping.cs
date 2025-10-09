@@ -1,6 +1,6 @@
 namespace UAE_Pass_Poc.Entities;
 
-public class RequestPresentationResponseMapping
+public class RequestPresentationResponseMapping : Entity
 {
     public Guid RequestPresentationId { get; set; }
     public string RequestId { get; set; } = string.Empty;

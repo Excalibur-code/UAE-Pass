@@ -1,7 +1,9 @@
 namespace UAE_Pass_Poc.Entities;
 
-public class ReceivePresentationResponse
+public class ReceivePresentationResponse : Entity
 {
+    public Guid RequestPresentationId { get; set; }
+    public string ProofOfPresentationId { get; set; } = string.Empty;
     public Guid ReceivePresentationId { get; set; }
-    public string PresentationReceiptID { get; set; } = string.Empty;
+    public string PresentationReceiptId { get; set; } = string.Empty;
 }
