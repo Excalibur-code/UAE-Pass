@@ -3,6 +3,7 @@ namespace UAE_Pass_Poc.Enums
     public enum RequestOrigin
     {
         WEB = 1,
-        MOBILE = 2
+        MOBILE = 2,
+        QR = 3
     }
 }

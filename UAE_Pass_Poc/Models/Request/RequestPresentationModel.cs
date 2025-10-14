@@ -1,51 +1,94 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
+using UAE_Pass_Poc.Convertor;
 using UAE_Pass_Poc.CustomAttributes;
 using UAE_Pass_Poc.Enums;
 
 namespace UAE_Pass_Poc.Models.Request
-{
+{   
     public class RequestPresentationModel
     {
+        [JsonPropertyName("partnerId")]
         [SwaggerIgnore]
-        public string PartnerId { get; set; } = string.Empty;
-        [Required]
+        public string? PartnerId { get; set; } = null;
+
+        [JsonPropertyName("purposeEN")]
         public string PurposeEN { get; set; } = string.Empty;
-        [Required]
+
+        [JsonPropertyName("purposeAR")]
         public string PurposeAR { get; set; } = string.Empty;
+
+        [JsonPropertyName("requestId")]
         [SwaggerIgnore]
-        public string Request { get; set; } = string.Empty; //Customized Id - Should be set internally
-        [Required]
+        public string RequestId { get; set; } = string.Empty;
+
+        [JsonPropertyName("email")]
         [EmailAddress]
-        public string Email { get; set; } = string.Empty;
-        [Required]
+        public string? Email { get; set; } = null; // if you want to prefill email in UAE Pass app
+
+        [JsonPropertyName("mobile")]
         [Phone]
-        public string Mobile { get; set; } = string.Empty; //Should be in E.164 format
-        [Required]
+        public string? Mobile { get; set; } = null; // if you want to prefill mobile in UAE Pass app
+
+        // Send as formatted string, use a converter
+        [JsonPropertyName("expiryDate")]
+        [JsonConverter(typeof(PlainDateTimeConverter))]
         public DateTime ExpiryDate { get; set; }
-        [Required]
+
+        [JsonPropertyName("origin")]
+        [JsonConverter(typeof(JsonStringEnumConverter))]
         public RequestOrigin Origin { get; set; } = RequestOrigin.WEB;
-        public List<string> RequestedVerifiedAttributes { get; set; } = new List<string>(); //Check GetVerifiedAttributes() API for response types
-        [Required]
-        public List<DocumentInfo> RequestedDocuments { get; set; } = new List<DocumentInfo>();
+
+        [JsonPropertyName("requestedVerifiedAttributes")]
+        public List<string> RequestedVerifiedAttributes { get; set; } = new();
+
+        [JsonPropertyName("requestedDocuments")]
+        public List<DocumentInfo> RequestedDocuments { get; set; } = new();
     }
 
     public class DocumentInfo
     {
-        public DocumentType? DocumentType { get; set; } = null; 
-        public string? CustomDocumentTypeEN { get; set; } = null; // if any other doc, which is not mentioned in document type list
-        public string? CustomDocumentTypeAR { get; set; } = null;
+        [JsonPropertyName("documentType")]
+        [JsonConverter(typeof(JsonStringEnumConverter))] // ensures "EmiratesId" not 0
+        public DocumentType? DocumentType { get; set; } = null;
+
+        [JsonPropertyName("required")]
         public bool Required { get; set; } = true;
-        public bool? RequiredAttested { get; set; } = null; // if attestation is required for this document
-        public bool? AllowExpired { get; set; } = null; // if expired document is allowed
-        public bool? SelfSignedAccepted { get; set; } = null; // if self-signed document is allowed; true for custom document types
-        public EmirateCode? Emirate { get; set; } = null; // two character code of emirate, e.g. "DX", "SH" where doc needs to be issued
-        public bool? SingleInstanceRequested { get; set; } = null; // true - if only one instance of this document is requested;
-        public List<DocInstance>? Instances { get; set; } = null; // if specific instances of this document type are requested, else all will be shown.
+
+        // Include the rest as needed, matching API names:
+        [JsonPropertyName("requiredAttested")]
+        public bool? RequiredAttested { get; set; } = null;
+
+        [JsonPropertyName("allowExpired")]
+        public bool? AllowExpired { get; set; } = null;
+
+        [JsonPropertyName("selfSignedAccepted")]
+        public bool? SelfSignedAccepted { get; set; } = null;
+
+        [JsonPropertyName("emirate")]
+        [JsonConverter(typeof(JsonStringEnumConverter))]
+        public EmirateCode? Emirate { get; set; } = null;
+
+        [JsonPropertyName("singleInstanceRequested")]
+        public bool? SingleInstanceRequested { get; set; } = null;
+
+        [JsonPropertyName("instances")]
+        public List<DocInstance>? Instances { get; set; } = null;
+
+        // For custom docs (only if you use them)
+        [JsonPropertyName("customDocumentTypeEN")]
+        public string? CustomDocumentTypeEN { get; set; }
+
+        [JsonPropertyName("customDocumentTypeAR")]
+        public string? CustomDocumentTypeAR { get; set; }
     }
 
     public class DocInstance
     {
-        public string? Name { get; set; } = null;
-        public string? Value { get; set; } = null; 
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("value")]
+        public string? Value { get; set; }
     }
 }

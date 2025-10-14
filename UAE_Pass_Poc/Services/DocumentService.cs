@@ -1,6 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using AutoMapper;
+using UAE_Pass_Poc.DBContext;
 using UAE_Pass_Poc.Enums;
 using UAE_Pass_Poc.Exceptions;
 using UAE_Pass_Poc.Models.Request;
@@ -15,6 +18,8 @@ public class DocumentService : IDocumentService
     private readonly HttpClient _httpClient;
     private readonly ICadesVerificationService _cadesVerificationService;
     private readonly IPresentationProcessingService _presentationProcessingService;
+    private readonly IMapper _mapper;
+    private readonly UaePassDbContext _dbContext;
     private readonly string _documentStoragePath;
     private readonly string _uaePassSecret;
     private readonly string _partnerId;
@@ -22,35 +27,34 @@ public class DocumentService : IDocumentService
     private readonly string _accessCode;
 
     public DocumentService(ILogger<DocumentService> logger, IConfiguration configuration, HttpClient httpClient,
-    ICadesVerificationService cadesVerificationService, IPresentationProcessingService presentationProcessingService)
+    ICadesVerificationService cadesVerificationService, IPresentationProcessingService presentationProcessingService,
+    IMapper mapper, UaePassDbContext dbContext)
     {
         _logger = logger;
         _httpClient = httpClient;
         _cadesVerificationService = cadesVerificationService;
         _presentationProcessingService = presentationProcessingService;
+        _mapper = mapper;
+        _dbContext = dbContext;
         _documentStoragePath = configuration["UAEPass:DocumentStoragePath"] ?? "uaepass_documents";
         _uaePassSecret = configuration["UAEPass:Secret"] ?? "7bbfde6064b01a3c8389bcb689a6ecae";
         _partnerId = configuration["UAEPass:PartnerId"] ?? "did:uae:eth:c76036545911b577d6383ad4b1f593ae8f7982a2";
         _baseUri = configuration["UAEPass:BaseUri"] ?? "https://papistage.dv.government.net.ae";
-        _accessCode = "0ccce1d8-2550-362c-bb84-90bbb32c517f";
+        _accessCode = "f1ce7923-33d2-3a0b-8829-ec852d717368";
     }
 
     #region Presentation Request Status
     public async Task<PresentationRequestStatusResponse> GetPresentationRequestStatusAsync(string proofOfPresentationRequestId)
     {
-        if (!string.IsNullOrWhiteSpace(proofOfPresentationRequestId))
+        if (string.IsNullOrWhiteSpace(proofOfPresentationRequestId))
         {
             throw new ArgumentException("Proof Of Presentation request Id is required.");
         }
 
         var url = $"{_baseUri}/papi/v1.0/presentation/{proofOfPresentationRequestId}/presentation-status";
-        var httpRequest = new HttpRequestMessage(HttpMethod.Get, url);
-        var accessCode = _accessCode; //provide new code here.
-        var jwtToken = GenerateUAEPassAccessToken(accessCode, 1);
-        // Need valid JWT token with recipient id as subject and sender id as issuer.
-        //add authentication
-        httpRequest.Headers.Add("Authorization", $"Bearer {jwtToken}");
-        var response = await SendAsync<PresentationRequestStatusResponse>(httpRequest);
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {GenerateUAEPassAccessToken(_accessCode)}");
+        var response = await SendAsync<PresentationRequestStatusResponse>(request);
         if (!response.IsSuccess)
         {
             throw new UaePassRequestException($"Get Presentation Request Status API Failed With Message: {response.Message} and Code: {response.Code}");
@@ -69,17 +73,8 @@ public class DocumentService : IDocumentService
 
         var url = $"{_baseUri}/papi/v1.0/presentation/credential-status";
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
-        var accessCode = _accessCode; //provide new code here.
-        var jwtToken = GenerateUAEPassAccessToken(accessCode, 1);
-        httpRequest.Headers.Add("Authorization", $"Bearer {jwtToken}");
-
-        var requestBody = new
-        {
-            proofOfPresentationId = request.ProofOfPresentationId,
-            requestId = request.RequestId,
-            proofOfIssuanceId = request.ProofOfIssuanceId
-        };
-        httpRequest.Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
+        httpRequest.Headers.Add("Authorization", $"Bearer {GenerateUAEPassAccessToken(_accessCode)}");
+        httpRequest.Content = CreateJsonContent(request);
 
         var response = await SendAsync<CredentialStatusResponse>(httpRequest);
         if (!response.IsSuccess)
@@ -96,9 +91,7 @@ public class DocumentService : IDocumentService
     {
         var url = $"{_baseUri}/papi/v2/document-types?types={issuer.ToString()}&lang=en";
         var request = new HttpRequestMessage(HttpMethod.Get, url);
-        var accessCode = _accessCode; //provide new code here.
-        var jwtToken = GenerateUAEPassAccessToken(accessCode, 1);
-        request.Headers.Add("Authorization", $"Bearer {jwtToken}");
+        request.Headers.Add("Authorization", $"Bearer {GenerateUAEPassAccessToken(_accessCode)}");
         var response = await SendAsync<List<DocumentTypesResponse>>(request);
         if (!response.IsSuccess)
         {
@@ -113,7 +106,8 @@ public class DocumentService : IDocumentService
     {
         //to be setup internally.
         model.PartnerId = _partnerId;
-        model.Request = "WASL" + DateTime.Now.ToString("yy") + "AE" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        model.RequestId = "WASL" + DateTime.Now.ToString("yy") + "AE" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
         //request validation
         if (model.RequestedDocuments.Any(x => x.DocumentType == null))
         {
@@ -151,16 +145,23 @@ public class DocumentService : IDocumentService
             }
         }
 
+        //configure request
         var url = $"{_baseUri}/papi/v2/presentation-requests";
         var request = new HttpRequestMessage(HttpMethod.Post, url);
-        var accessCode = _accessCode; //provide new code here.
-        var jwtToken = GenerateUAEPassAccessToken(accessCode, 1);
-        request.Headers.Add("Authorization", $"Bearer {jwtToken}");
+        request.Headers.Add("Authorization", $"Bearer {GenerateUAEPassAccessToken(_accessCode)}");
+        request.Content = CreateJsonContent(model);
+
+        //send request
         var response = await SendAsync<RequestPresentationResponseModel>(request);
         if (!response.IsSuccess)
         {
             throw new UaePassRequestException($"Request For Presentation Failed with Message: {response.Message} and Code : {response.Code}");
         }
+
+        //store payload in database.
+        var entity = _mapper.Map<Entities.RequestPresentation>(model);
+        _dbContext.RequestPresentations.Add(entity);
+        await _dbContext.SaveChangesAsync();
 
         return response.Data ?? new RequestPresentationResponseModel();
     }
@@ -240,96 +241,6 @@ public class DocumentService : IDocumentService
         _logger.LogInformation($"Successfully processed Presentation Request for RequestId: {model.ProofOfPresentationRequestId}. Generated Receipt ID: {presentationReceiptId}");
 
         return new PresentationReceiveResponse { PresentationReceiptID = presentationReceiptId };
-    }
-    #endregion
-
-    #region Http Helpers
-    private async Task<RestResponseModel<T>> SendAsync<T>(HttpRequestMessage request)
-    {
-        try
-        {
-            _logger.LogDebug("Sending HTTP request to: {Url}", request.RequestUri);
-
-            // Use custom handler to enforce TLS 1.2 and bypass cert validation (for dev only)
-            var handler = new HttpClientHandler
-            {
-                SslProtocols = System.Security.Authentication.SslProtocols.Tls12,
-                ServerCertificateCustomValidationCallback = (message, cert, chain, errors) =>
-                {
-                    _logger.LogWarning("Bypassing SSL certificate validation for: {CertSubject}", cert.Subject);
-                    return true; // ⚠️ Only for development/testing
-                }
-            };
-            // Create Custom Client with handler
-            using var client = new HttpClient(handler);
-
-            //var response = await _httpClient.SendAsync(request); // Original Client
-            var response = await client.SendAsync(request); // Use custom client with handler
-            var content = await response.Content.ReadAsStringAsync();
-
-            _logger.LogDebug("Received response with status code {StatusCode}", response.StatusCode);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogError("HTTP request failed with status code {StatusCode} and reason: {Reason}", response.StatusCode, response.ReasonPhrase);
-                // Attempt to deserialize error response           
-                var errorModel = JsonSerializer.Deserialize<RestResponseModel<T>>(content, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
-
-                return new RestResponseModel<T>
-                {
-                    IsSuccess = false,
-                    StatusCode = (int)response.StatusCode,
-                    //Message = $"Error: {response.ReasonPhrase}",
-                    Data = default,
-                    // new properties
-                    Token = errorModel?.Token,
-                    Timestamp = errorModel?.Timestamp,
-                    Code = errorModel?.Code,
-                    Message = $"Error: {errorModel?.Message}"
-                };
-            }
-
-            var data = JsonSerializer.Deserialize<T>(content, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
-
-            if (object.Equals(data, default(T)))
-            {
-                _logger.LogWarning("Deserialization returned null for type {Type}", typeof(T).Name);
-                return new RestResponseModel<T>
-                {
-                    IsSuccess = false,
-                    StatusCode = (int)response.StatusCode,
-                    Message = "Deserialization returned null",
-                    Data = default
-                };
-            }
-
-            _logger.LogDebug("Deserialization successful for type {Type}", typeof(T).Name);
-
-            return new RestResponseModel<T>
-            {
-                IsSuccess = true,
-                StatusCode = (int)response.StatusCode,
-                Message = "Success",
-                Data = data
-            };
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Exception occurred while sending HTTP request.");
-            return new RestResponseModel<T>
-            {
-                IsSuccess = false,
-                StatusCode = 500,
-                Message = $"Exception: {ex.Message}",
-                Data = default
-            };
-        }
     }
     #endregion
 
@@ -471,11 +382,98 @@ public class DocumentService : IDocumentService
     {
         var url = $"{_baseUri}/papi/v1.0/verified-attributes?type=ALL";
         var request = new HttpRequestMessage(HttpMethod.Get, url);
-        var accessCode = _accessCode;
-        var jwtToken = GenerateUAEPassAccessToken(accessCode, 1);
-        request.Headers.Add("Authorization", $"Bearer {jwtToken}");
+        request.Headers.Add("Authorization", $"Bearer {GenerateUAEPassAccessToken(_accessCode)}");
         var response = await SendAsync<List<VerifiedAttributesResponse>>(request);
         return response.Data ?? new List<VerifiedAttributesResponse>();
+    }
+    #endregion
+
+    #region Request Helpers
+    public static HttpContent CreateJsonContent<T>(T model)
+    {
+        var options = new JsonSerializerOptions
+        {
+            Converters = { new JsonStringEnumConverter() },
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            WriteIndented = false
+        };
+
+        var jsonContent = JsonSerializer.Serialize(model, options);
+        return new StringContent(jsonContent, Encoding.UTF8, "application/json");
+    }
+
+    private async Task<RestResponseModel<T>> SendAsync<T>(HttpRequestMessage request)
+    {
+        try
+        {
+            _logger.LogDebug("Sending HTTP request to: {Url}", request.RequestUri);
+
+            var response = await _httpClient.SendAsync(request);
+            var content = await response.Content.ReadAsStringAsync();
+
+            _logger.LogDebug("Received response with status code {StatusCode}", response.StatusCode);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("HTTP request failed with status code {StatusCode} and reason: {Reason}", response.StatusCode, response.ReasonPhrase);
+
+                // Attempt to deserialize error response           
+                var errorModel = JsonSerializer.Deserialize<RestResponseModel<T>>(content, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                return new RestResponseModel<T>
+                {
+                    IsSuccess = false,
+                    StatusCode = (int)response.StatusCode,
+                    Data = default,
+                    Token = errorModel?.Token,
+                    Timestamp = errorModel?.Timestamp,
+                    Code = errorModel?.Code,
+                    Message = $"Error: {errorModel?.Message}"
+                };
+            }
+
+            var data = JsonSerializer.Deserialize<T>(content, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (object.Equals(data, default(T)))
+            {
+                _logger.LogWarning("Deserialization returned null for type {Type}", typeof(T).Name);
+                return new RestResponseModel<T>
+                {
+                    IsSuccess = false,
+                    StatusCode = (int)response.StatusCode,
+                    Message = "Deserialization returned null",
+                    Data = default
+                };
+            }
+
+            _logger.LogDebug("Deserialization successful for type {Type}", typeof(T).Name);
+
+            return new RestResponseModel<T>
+            {
+                IsSuccess = true,
+                StatusCode = (int)response.StatusCode,
+                Message = "Success",
+                Data = data
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Exception occurred while sending HTTP request.");
+            return new RestResponseModel<T>
+            {
+                IsSuccess = false,
+                StatusCode = 500,
+                Message = $"Exception: {ex.Message}",
+                Data = default
+            };
+        }
     }
     #endregion
 }

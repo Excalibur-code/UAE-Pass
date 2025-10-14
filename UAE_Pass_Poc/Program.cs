@@ -1,16 +1,13 @@
-using UAE_Pass_Poc.Services.Interfaces;
 using UAE_Pass_Poc.CustomAttributes;
 using UAE_Pass_Poc.Filters;
-using UAE_Pass_Poc.Services;
-using UAE_Pass_Poc.DBContext;
-using MySql.Data.MySqlClient;
-using Microsoft.EntityFrameworkCore;
+using UAE_Pass_Poc.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+builder.AddLogger();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
@@ -40,12 +37,9 @@ builder.Services.AddControllers(c =>
     c.Filters.Add<FormatExceptionResponseAttribute>();
 });
 
-//Add Services in DI container
-builder.Services.AddScoped<IDocumentService, DocumentService>();
-builder.Services.AddScoped<ICadesVerificationService, CadesVerificationService>();
-builder.Services.AddScoped<IPresentationProcessingService, PresentationProcessingService>();
-builder.Services.AddScoped<IDidResolutionService, DidResolutionService>();
-builder.Services.AddScoped<HttpClient>();
+
+builder.Services.AddInfrastructure(builder.Configuration);
+
 
 var app = builder.Build();
 
@@ -58,6 +52,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseLogger();
 app.MapControllers();
 app.UseCors("AllowAll");
 
