@@ -251,7 +251,7 @@ public class DocumentService : IDocumentService
 
         bool isCadesSignatureValid = _cadesVerificationService.ValidateCADESignature(
             model.CitizenSignature,
-            string.Empty
+            hashHex
         );
 
         if (!isCadesSignatureValid)
