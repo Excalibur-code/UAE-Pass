@@ -24,13 +24,12 @@ namespace UAE_Pass_Poc.Models.Request
 
         [JsonPropertyName("email")]
         [EmailAddress]
-        public string? Email { get; set; } = null; // if you want to prefill email in UAE Pass app
+        public string? Email { get; set; } = null;
 
         [JsonPropertyName("mobile")]
         [Phone]
-        public string? Mobile { get; set; } = null; // if you want to prefill mobile in UAE Pass app
+        public string? Mobile { get; set; } = null;
 
-        // Send as formatted string, use a converter
         [JsonPropertyName("expiryDate")]
         [JsonConverter(typeof(PlainDateTimeConverter))]
         public DateTime ExpiryDate { get; set; }
@@ -49,13 +48,12 @@ namespace UAE_Pass_Poc.Models.Request
     public class DocumentInfo
     {
         [JsonPropertyName("documentType")]
-        [JsonConverter(typeof(JsonStringEnumConverter))] // ensures "EmiratesId" not 0
+        [JsonConverter(typeof(JsonStringEnumConverter))]
         public DocumentType? DocumentType { get; set; } = null;
 
         [JsonPropertyName("required")]
         public bool Required { get; set; } = true;
 
-        // Include the rest as needed, matching API names:
         [JsonPropertyName("requiredAttested")]
         public bool? RequiredAttested { get; set; } = null;
 
@@ -75,7 +73,6 @@ namespace UAE_Pass_Poc.Models.Request
         [JsonPropertyName("instances")]
         public List<DocInstance>? Instances { get; set; } = null;
 
-        // For custom docs (only if you use them)
         [JsonPropertyName("customDocumentTypeEN")]
         public string? CustomDocumentTypeEN { get; set; }
 

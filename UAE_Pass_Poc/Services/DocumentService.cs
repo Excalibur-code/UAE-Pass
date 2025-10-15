@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using AutoMapper;
 using UAE_Pass_Poc.DBContext;
+using UAE_Pass_Poc.Entities;
 using UAE_Pass_Poc.Enums;
 using UAE_Pass_Poc.Exceptions;
 using UAE_Pass_Poc.Models.Request;
@@ -40,7 +41,7 @@ public class DocumentService : IDocumentService
         _uaePassSecret = configuration["UAEPass:Secret"] ?? "7bbfde6064b01a3c8389bcb689a6ecae";
         _partnerId = configuration["UAEPass:PartnerId"] ?? "did:uae:eth:c76036545911b577d6383ad4b1f593ae8f7982a2";
         _baseUri = configuration["UAEPass:BaseUri"] ?? "https://papistage.dv.government.net.ae";
-        _accessCode = "f1ce7923-33d2-3a0b-8829-ec852d717368";
+        _accessCode = "461c43f6-f7e2-3055-9c6f-dde216c3549c";
     }
 
     #region Presentation Request Status
@@ -108,7 +109,48 @@ public class DocumentService : IDocumentService
         model.PartnerId = _partnerId;
         model.RequestId = "WASL" + DateTime.Now.ToString("yy") + "AE" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-        //request validation
+        _logger.LogInformation("Initiating Request Presentation process for RequestId: {RequestId}", model.RequestId);
+
+        //Step 1 - Validate the model.
+        var (isValid, validationErrors) = ValidatePresentationRequest(model);
+        if (!isValid && validationErrors != null && validationErrors.Any())
+        {
+            _logger.LogWarning("Request Presentation model validation failed: {Errors}", string.Join(", ", validationErrors));
+            throw new ArgumentException("Invalid request model", string.Join(", ", validationErrors));
+        }
+
+        //Step 2 - Configure request
+        var url = $"{_baseUri}/papi/v2/presentation-requests";
+        var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Add("Authorization", $"Bearer {GenerateUAEPassAccessToken(_accessCode)}");
+        request.Content = CreateJsonContent(model);
+
+        //Step 3 - Send request
+        var response = await SendAsync<RequestPresentationResponseModel>(request);
+        if (!response.IsSuccess)
+        {
+            _logger.LogError("Request Presentation API call failed. Message: {Message}, Code: {Code}", response.Message, response.Code);
+            throw new UaePassRequestException($"Request For Presentation Failed with Message: {response.Message} and Code : {response.Code}");
+        }
+
+        //Step 4 - Store payload & response in database.
+        var requestPresentationEntity = _mapper.Map<Entities.RequestPresentation>(model);
+        _dbContext.RequestPresentations.Add(requestPresentationEntity);
+
+        var responseMappingEntity = _mapper.Map<RequestPresentationResponseMapping>(response.Data);
+        responseMappingEntity.RequestPresentationId = requestPresentationEntity.Id;
+        responseMappingEntity.RequestId = model.RequestId;
+        _dbContext.RequestPresentationResponseMappings.Add(responseMappingEntity);
+
+        await _dbContext.SaveChangesAsync();
+
+        _logger.LogInformation("Request Presentation process completed successfully for RequestId: {RequestId}", model.RequestId);
+        return response.Data ?? new RequestPresentationResponseModel();
+    }
+
+    private static (bool isValid, List<string>? errors) ValidatePresentationRequest(RequestPresentationModel model)
+    {
+        var errors = new List<string>();
         if (model.RequestedDocuments.Any(x => x.DocumentType == null))
         {
             var customDocs = model.RequestedDocuments.Where(x => x.DocumentType == null).ToList();
@@ -116,9 +158,24 @@ public class DocumentService : IDocumentService
             {
                 if (string.IsNullOrEmpty(doc.CustomDocumentTypeEN) || string.IsNullOrEmpty(doc.CustomDocumentTypeAR))
                 {
-                    throw new Exception("Custom document types must have both English and Arabic names.");
+                    errors.Add("Custom document types must have both English and Arabic names.");
                 }
-                //model.RequestedDocuments.Find(x => x.CustomDocumentTypeEN == doc.CustomDocumentTypeEN)?.SelfSignedAccepted = true; //for custom docs, self-signed should be accepted.
+            }
+
+            if (customDocs.GroupBy(d => d.CustomDocumentTypeEN).Any(g => g.Count() > 1))
+            {
+                errors.Add("Custom document types must have unique names.");
+            }
+
+            if (customDocs.GroupBy(d => d.CustomDocumentTypeAR).Any(g => g.Count() > 1))
+            {
+                errors.Add("Custom document types must have unique Arabic names.");
+            }
+
+            var nonSelfSignedCustomDocs = customDocs.Where(d => d.SelfSignedAccepted == false || d.SelfSignedAccepted == null).ToList();
+            if (nonSelfSignedCustomDocs.Any())
+            {
+                errors.Add("Custom document types must accept self-signed documents.");
             }
         }
 
@@ -129,41 +186,28 @@ public class DocumentService : IDocumentService
             {
                 if (doc.Instances == null || !doc.Instances.Any())
                 {
-                    throw new Exception("Documents allowing single/multiple instances must specify at least one instance.");
+                    errors.Add("Documents allowing single/multiple instances must specify at least one instance.");
                 }
 
                 var instances = doc.Instances;
-                if (instances.GroupBy(i => i.Name).Any(g => g.Count() > 1))
+                if (instances!.GroupBy(i => i.Name).Any(g => g.Count() > 1))
                 {
-                    throw new Exception("Document instances must have unique names.");
+                    errors.Add("Document instances must have unique names.");
                 }
 
-                if (instances.Any(i => string.IsNullOrEmpty(i.Name) || string.IsNullOrEmpty(i.Value)))
+                if (instances!.Any(i => string.IsNullOrEmpty(i.Name) || string.IsNullOrEmpty(i.Value)))
                 {
-                    throw new Exception("Each document instance must have both a name and a value.");
+                    errors.Add("Each document instance must have both a name and a value.");
                 }
             }
         }
 
-        //configure request
-        var url = $"{_baseUri}/papi/v2/presentation-requests";
-        var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.Add("Authorization", $"Bearer {GenerateUAEPassAccessToken(_accessCode)}");
-        request.Content = CreateJsonContent(model);
-
-        //send request
-        var response = await SendAsync<RequestPresentationResponseModel>(request);
-        if (!response.IsSuccess)
+        if(errors.Any())
         {
-            throw new UaePassRequestException($"Request For Presentation Failed with Message: {response.Message} and Code : {response.Code}");
+            return (false, errors);
         }
 
-        //store payload in database.
-        var entity = _mapper.Map<Entities.RequestPresentation>(model);
-        _dbContext.RequestPresentations.Add(entity);
-        await _dbContext.SaveChangesAsync();
-
-        return response.Data ?? new RequestPresentationResponseModel();
+        return (true, null);
     }
     #endregion
 
@@ -205,9 +249,9 @@ public class DocumentService : IDocumentService
         string hashHex = BitConverter.ToString(hashOfCombinedSignedPresentation).Replace("-", "").ToLowerInvariant();
         _logger.LogDebug($"Calculated SHA256 Hash of combined SignedPresentation for CAdES: {hashHex}");
 
-        bool isCadesSignatureValid = await _cadesVerificationService.VerifyCadesSignature(
+        bool isCadesSignatureValid = _cadesVerificationService.ValidateCADESignature(
             model.CitizenSignature,
-            hashOfCombinedSignedPresentation
+            string.Empty
         );
 
         if (!isCadesSignatureValid)
@@ -247,6 +291,7 @@ public class DocumentService : IDocumentService
     #region UAE Pass JWT Token
     public string GenerateUAEPassAccessToken(string accessCode, int expirationHours = 1)
     {
+        _logger.LogInformation("Generating UAE Pass Access Token from access code {accessCode} with expiration {expirationHours} hours.", accessCode, expirationHours);
         if (string.IsNullOrEmpty(accessCode))
             return string.Empty;
 
@@ -290,6 +335,7 @@ public class DocumentService : IDocumentService
         var signatureBase64 = Base64UrlEncode(signature);
 
         // Return complete JWT token
+        _logger.LogInformation("UAE Pass Access Token generated successfully.");
         return $"{headerBase64}.{payloadBase64}.{signatureBase64}";
     }
 

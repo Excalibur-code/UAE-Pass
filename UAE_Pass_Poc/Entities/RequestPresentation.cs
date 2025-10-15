@@ -11,6 +11,6 @@ public class RequestPresentation : Entity
     public string Mobile { get; set; } = string.Empty;
     public DateTime ExpiryDate { get; set; }
     public RequestOrigin Origin { get; set; } = RequestOrigin.WEB;
-    public string RequestedVerifiedAttributes { get; set; } = string.Empty; //comma ',' seperated attributes.
+    public string RequestedVerifiedAttributes { get; set; } = string.Empty;
     public virtual ICollection<Document> RequestedDocuments { get; set; } = null!;
 }

@@ -9,5 +9,5 @@ public interface ICadesVerificationService
     /// <param name="payloadHash">The SHA256 hash of the content that was signed.</param>
 
     /// <returns>True if the signature is valid, false otherwise.</returns>
-    Task<bool> VerifyCadesSignature(string cadesSignature, byte[] payloadHash);
+    bool ValidateCADESignature(string inputSignature, string inputData);
 }

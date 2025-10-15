@@ -168,9 +168,9 @@ namespace UAE_Pass_Poc.Services
             _logger.LogDebug($"Calculated SHA256 Hash of encodedCredential for VC ID {credential.VcId}: {hashHex}");
 
             // 3. Perform CAdES verification using issuerSignature and the hash
-            bool isIssuerSignatureValid = await _cadesVerificationService.VerifyCadesSignature(
+            bool isIssuerSignatureValid = _cadesVerificationService.ValidateCADESignature(
                 credential.IssuerSignature,
-                hashOfEncodedCredential
+                string.Empty
             );
 
             if (!isIssuerSignatureValid)
