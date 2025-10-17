@@ -1,11 +1,11 @@
-extern alias BCCrypto;
 extern alias BCCryptography;
 
+using System.Text;
 using Nethereum.Signer;
 using Nethereum.Hex.HexConvertors.Extensions;
-using SimpleBase;
-using BigInteger = BCCryptography::Org.BouncyCastle.Math.BigInteger;
-using System.Text;
+using BigInteger = System.Numerics.BigInteger;
+using BouncyBigInteger = BCCryptography::Org.BouncyCastle.Math.BigInteger;
+using UAE_Pass_Poc.Exceptions;
 
 namespace UAE_Pass_Poc.Services
 {
@@ -19,123 +19,170 @@ namespace UAE_Pass_Poc.Services
         }
 
         /// <summary>
-        /// payload - (id or vcId as applicable)
-        /// publicKey - (publicKeyBase58 - proof section)
-        /// signature - (signature - proof section)
+        /// Validates signature
         /// </summary>
-        /// <param name="payload"></param>
-        /// <param name="publicKey"></param>
-        /// <param name="signature"></param>
-        /// <returns></returns>
         public bool ValidateSignature(string payload, string publicKey, string signature)
         {
-            if (string.IsNullOrWhiteSpace(payload) ||
-                string.IsNullOrWhiteSpace(publicKey) ||
-                string.IsNullOrWhiteSpace(signature))
-            {
-                _logger.LogWarning("Invalid input parameters for signature validation.");
-                return false;
-            }
+            // First, let's decode the expected public key to see what it contains
+            DecodeExpectedPublicKey(publicKey);
 
-            var r = HexStringToByteArray(signature.Substring(0, 64));
-            var s = HexStringToByteArray(signature.Substring(64, 64));
-            var v = HexStringToByteArray(signature.Substring(128))[0];
+            byte[] r = signature.Substring(0, 64).HexToByteArray();
+            byte[] s = signature.Substring(64, 64).HexToByteArray();
+            byte v = signature.Substring(128).HexToByteArray()[0];
 
-            bool flag = ValidateSignature(payload, publicKey, v, r, s) || ValidateHashedSignature(payload, publicKey, v, r, s);
-            return flag;
+            bool isValid = ValidateSignature(payload, publicKey, v, r, s) ||
+                           ValidateHashedSignature(payload, publicKey, v, r, s);  
+            return isValid;
         }
 
-        public bool ValidateHashedSignature(string payLoad, string publicKeyAsBase58, byte v, byte[] r, byte[] s)
+        /// <summary>
+        /// Validates signature treating payload as RAW MESSAGE (will hash it with Ethereum prefix)
+        /// </summary>
+        public static bool ValidateSignature(string payload, string publicKeyAsBase58, byte v, byte[] r, byte[] s)
         {
             try
             {
-                // Convert hex string to byte array
-                byte[] messageHash = payLoad.HexToByteArray();
+                var payloadBytes = payload.HexToByteArray();
+                
+                // Create EthECDSASignature using BouncyCastle BigIntegers
+                var rBig = new BouncyBigInteger(1, r);
+                var sBig = new BouncyBigInteger(1, s);
+                var signature = new EthECDSASignature(rBig, sBig, new byte[] { v });
 
-                // // Create signature from components - convert byte arrays to BigInteger
-                var rBigInt = new BigInteger(r.Reverse().Concat(new byte[] { 0 }).ToArray());
-                var sBigInt = new BigInteger(s.Reverse().Concat(new byte[] { 0 }).ToArray());
-                var signature = new EthECDSASignature(rBigInt, sBigInt, new byte[] { v });
+                // Hash the message WITH Ethereum prefix
+                var signer = new EthereumMessageSigner();
+                var hashedMessage = signer.HashPrefixedMessage(payloadBytes);
+                
+                // // Try both recovery IDs
+                // for (int rid = 0; rid <= 1; rid++)
+                // {
+                //     try
+                //     {
+                //         var ecKey = EthECKey.RecoverFromSignature(signature, rid, hashedMessage);
+                        
+                //         if (ecKey != null)
+                //         {
+                //             var result = CheckPublicKeyMatch(ecKey, publicKeyAsBase58, rid);
+                //             if (result) return true;
+                //         }
+                //     }
+                //     catch { }
+                // }
+                
+                // return false;
 
-                // // For recovery, use the recovery ID (0 or 1)
-                // // If v is 27 or 28 (Ethereum standard), subtract 27
-                // // If v is already 0 or 1, use it directly
                 int recoveryId = v >= 27 ? v - 27 : v;
-
-                // // Recover public key from signature
-                var ecKey = EthECKey.RecoverFromSignature(signature, recoveryId, messageHash);
+                var ecKey = EthECKey.RecoverFromSignature(signature, recoveryId, payloadBytes);
 
                 if (ecKey == null)
-                {
-                    throw new Exception("Failed to recover public key from signature");
-                }
+                    return false;
 
-                // Get public key as BigInteger
-                byte[] pubKeyBytes = ecKey.GetPubKey();
-
-                // Remove the 0x04 prefix for uncompressed keys
-                if (pubKeyBytes.Length == 65 && pubKeyBytes[0] == 0x04)
-                {
-                    pubKeyBytes = pubKeyBytes.Skip(1).ToArray();
-                }
-
-                BigInteger pubKeyRecovered = new BigInteger(pubKeyBytes.Reverse().Concat(new byte[] { 0 }).ToArray());
-
-                var pubKeyRecoveredBase58 = PublicKeyAsBase58(pubKeyRecovered);
-                _logger.LogInformation($"Recovered Public Key (Base58): {pubKeyRecoveredBase58}");
-                return publicKeyAsBase58.Equals(pubKeyRecoveredBase58, StringComparison.OrdinalIgnoreCase);
+                var result = CheckPublicKeyMatch(ecKey, publicKeyAsBase58, recoveryId);
+                return result;
             }
             catch (Exception ex)
             {
-                throw new Exception("Invalid signature");
+                Console.WriteLine($"Error: {ex.Message}");
+                return false;
             }
         }
 
         /// <summary>
-        /// Converts a public key to Base58 encoding
+        /// Validates signature treating payload as ALREADY HASHED
         /// </summary>
-        /// <param name="publicKey">The public key as BigInteger</param>
-        /// <returns>Base58 encoded public key</returns>
+        public static bool ValidateHashedSignature(string payload, string publicKeyAsBase58, byte v, byte[] r, byte[] s)
+        {
+            try
+            {
+                var payloadBytes = payload.HexToByteArray();
+
+                // Create EthECDSASignature using BouncyCastle BigIntegers
+                var rBig = new BouncyBigInteger(1, r);
+                var sBig = new BouncyBigInteger(1, s);
+                var signature = new EthECDSASignature(rBig, sBig, new byte[] { v });
+
+                // // Try both recovery IDs
+                // for (int rid = 0; rid <= 1; rid++)
+                // {
+                //     try
+                //     {
+                //         var ecKey = EthECKey.RecoverFromSignature(signature, rid, payloadBytes);
+
+                //         if (ecKey != null)
+                //         {
+                //             var result = CheckPublicKeyMatch(ecKey, publicKeyAsBase58, rid);
+                //             if (result) return true;
+                //         }
+                //     }
+                //     catch { }
+                // }
+
+                int recoveryId = v >= 27 ? v - 27 : v;
+                var ecKey = EthECKey.RecoverFromSignature(signature, recoveryId, payloadBytes);
+
+                if (ecKey == null)
+                    return false;
+                
+                var result = CheckPublicKeyMatch(ecKey, publicKeyAsBase58, recoveryId);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Helper method to check if recovered public key matches expected
+        /// </summary>
+        private static bool CheckPublicKeyMatch(EthECKey ecKey, string publicKeyAsBase58, int recoveryId)
+        {   
+            // Get uncompressed public key
+            var pubKeyUncompressed = ecKey.GetPubKey(false);
+            
+            // Skip the 0x04 prefix
+            byte[] keyToUse = pubKeyUncompressed.Length == 65 && pubKeyUncompressed[0] == 0x04
+                ? pubKeyUncompressed.Skip(1).ToArray()
+                : pubKeyUncompressed;
+            
+            var pubKeyRecovered = new BigInteger(keyToUse, isUnsigned: true, isBigEndian: true);
+            var recoveredBase58 = PublicKeyAsBase58(pubKeyRecovered);
+            
+            bool isValid = string.Equals(publicKeyAsBase58, recoveredBase58, StringComparison.OrdinalIgnoreCase);
+            
+            return isValid;
+        }
+
+        /// <summary>
+        /// Converts public key to Base58 format
+        /// </summary>
         public static string PublicKeyAsBase58(BigInteger publicKey)
         {
-            string hexString = PublicKeyAsHexString(true, 128, publicKey);
-            byte[] bytes = Encoding.UTF8.GetBytes(hexString);
-            return Base58.Bitcoin.Encode(bytes);
+            var hexString = PublicKeyAsHexString(true, 128, publicKey);
+            return Base58.Encode(Encoding.UTF8.GetBytes(hexString));
         }
 
         /// <summary>
-        /// Converts a public key to hex string representation
+        /// Converts public key to hex string
         /// </summary>
-        /// <param name="withPrefix">Whether to include "0x" prefix</param>
-        /// <param name="size">The desired string length (padding with zeros)</param>
-        /// <param name="publicKey">The public key as BigInteger</param>
-        /// <returns>Hex string representation of public key</returns>
         public static string PublicKeyAsHexString(bool withPrefix, int size, BigInteger publicKey)
         {
-            // Convert BigInteger to byte array and then to hex string
-            byte[] bytes = publicKey.ToByteArray();
+            string publicKeyHexStr = publicKey.ToString("x");
 
-            // BigInteger.ToByteArray() returns little-endian with sign byte
-            // Reverse to get big-endian and remove trailing zero if present
-            if (bytes[bytes.Length - 1] == 0)
+            if (publicKeyHexStr.StartsWith("-"))
             {
-                Array.Resize(ref bytes, bytes.Length - 1);
+                publicKeyHexStr = publicKeyHexStr.Substring(1);
             }
-            Array.Reverse(bytes);
 
-            // Convert to hex string
-            string publicKeyHexStr = BitConverter.ToString(bytes).Replace("-", "").ToLower();
-
-            // Pad with leading zeros
             if (publicKeyHexStr.Length < size)
             {
-                publicKeyHexStr = new string('0', size - publicKeyHexStr.Length) + publicKeyHexStr;
+                publicKeyHexStr = publicKeyHexStr.PadLeft(size, '0');
             }
-            // Truncate if too long
-            // else if (publicKeyHexStr.Length > size)
-            // {
-            //     publicKeyHexStr = publicKeyHexStr.Substring(publicKeyHexStr.Length - size);
-            // }
+            else if (publicKeyHexStr.Length > size)
+            {
+                publicKeyHexStr = publicKeyHexStr.Substring(publicKeyHexStr.Length - size);
+            }
 
             if (withPrefix)
             {
@@ -144,87 +191,43 @@ namespace UAE_Pass_Poc.Services
 
             return publicKeyHexStr;
         }
-
-        private static byte[] HexStringToByteArray(string hex)
-        {
-            int length = hex.Length;
-            byte[] bytes = new byte[length / 2];
-            for (int i = 0; i < length; i += 2)
-            {
-                bytes[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
-            }
-            return bytes;
-        }
-
-
+        
+        #region Private Methods
+        
         /// <summary>
-        /// Validates an Ethereum signature
+        /// Decode the expected public key to understand its format
         /// </summary>
-        /// <param name="payload">The message payload as hex string</param>
-        /// <param name="publicKeyAsBase58">The public key in Base58 format</param>
-        /// <param name="v">The recovery id</param>
-        /// <param name="r">The r component of the signature</param>
-        /// <param name="s">The s component of the signature</param>
-        /// <returns>True if signature is valid, false otherwise</returns>
-        public bool ValidateSignature(string payload, string publicKeyAsBase58, byte v, byte[] r, byte[] s)
+        private static void DecodeExpectedPublicKey(string publicKeyBase58)
         {
             try
             {
-                // Convert hex payload to bytes
-                byte[] payloadBytes = payload.HexToByteArray();
-
-                // Create EthECDSASignature from r and s
-                // Ensure positive BigInteger by appending 0x00 if needed
-                var rBigInt = new BigInteger(r.Reverse().Concat(new byte[] { 0 }).ToArray());
-                var sBigInt = new BigInteger(s.Reverse().Concat(new byte[] { 0 }).ToArray());
-
-                var signature = new EthECDSASignature(rBigInt, sBigInt, new byte[] { v });
-
-                int recoveryId = v >= 27 ? v - 27 : v;
-                //var ecKey = EthECKey.RecoverFromSignature(signature, payloadBytes);
-
-                var ecKey = EthECKey.RecoverFromSignature(signature, recoveryId, payloadBytes);
-
-                _logger.LogInformation($"Payload: {payload}");
-                _logger.LogInformation($"Payload Bytes: {BitConverter.ToString(payloadBytes)}");
-                _logger.LogInformation($"r: {rBigInt}");
-                _logger.LogInformation($"s: {sBigInt}");
-                _logger.LogInformation($"v: {v}, recoveryId: {recoveryId}");
-
-
-                if (ecKey == null)
-                    return false;
-
-                // Get recovered public key and convert to Base58
-                byte[] pubKeyBytes = ecKey.GetPubKey();
-                BigInteger pubKeyRecovered = new BigInteger(pubKeyBytes.Reverse().Concat(new byte[] { 0 }).ToArray());
-                string recoveredPublicKeyBase58 = PublicKeyAsBase58(pubKeyRecovered);
-
-                // Compare with provided public key (case-insensitive)
-                return string.Equals(publicKeyAsBase58, recoveredPublicKeyBase58, StringComparison.OrdinalIgnoreCase);
+                // Decode from Base58
+                byte[] decodedBytes = Base58.Decode(publicKeyBase58);
+                
+                // Try to interpret as UTF-8 string (since Java encodes hex string as UTF-8)
+                string decodedString = Encoding.UTF8.GetString(decodedBytes);
+                
+                // If it starts with "0x", it's a hex string
+                if (decodedString.StartsWith("0x"))
+                {
+                    string hexPart = decodedString.Substring(2);
+                    
+                    // Try to parse as BigInteger
+                    try
+                    {
+                        BigInteger pubKeyBigInt = BigInteger.Parse("0" + hexPart, System.Globalization.NumberStyles.HexNumber);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new UaePassRequestException($"Could not parse as BigInteger: {ex.Message}");
+                    }
+                }
             }
             catch (Exception ex)
             {
-                throw new Exception("Invalid signature");
+                throw new UaePassRequestException($"Error decoding public key: {ex.Message}");
             }
         }
-
-        private static string PublicKeyAsBase58Validate(BigInteger publicKey)
-        {
-            // Convert to byte array (little-endian by default in .NET)
-            byte[] pubKeyBytes = publicKey.ToByteArray();
-
-            // Remove padding zero byte if present (sign byte)
-            if (pubKeyBytes[pubKeyBytes.Length - 1] == 0)
-            {
-                Array.Resize(ref pubKeyBytes, pubKeyBytes.Length - 1);
-            }
-
-            // Reverse to big-endian (Ethereum standard)
-            Array.Reverse(pubKeyBytes);
-
-            // Encode to Base58 using SimpleBase library
-            return SimpleBase.Base58.Bitcoin.Encode(pubKeyBytes);
-        }
+        #endregion
     }
 }

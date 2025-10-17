@@ -250,7 +250,17 @@ namespace UAE_Pass_Poc.Services
                         _logger.LogInformation($"Processing credential type: {credential.CredentialDocumentType}, VC ID: {credential.VcId}");
 
                         // 1. Verify Issuer Signature (CAdES)
-                        bool isIssuerSignatureValid = await VerifyCredentialIssuerSignature(credential);
+                        //bool isIssuerSignatureValid = await VerifyCredentialIssuerSignature(credential);
+                        string combinedSignedPresentationString = string.Join("", credential.EncodedCredential);
+                        byte[] combinedSignedPresentationBytes = Encoding.UTF8.GetBytes(combinedSignedPresentationString);
+
+                        byte[] hashOfCombinedSignedPresentation;
+                        using (SHA256 sha256Hash = SHA256.Create())
+                        {
+                            hashOfCombinedSignedPresentation = sha256Hash.ComputeHash(combinedSignedPresentationBytes);
+                        }
+                        string hashHex = BitConverter.ToString(hashOfCombinedSignedPresentation).Replace("-", "").ToLowerInvariant();
+                        bool isIssuerSignatureValid = _cadesVerificationService.ValidateCADESignature(credential.IssuerSignature!, hashHex);
                         if (!isIssuerSignatureValid)
                         {
                             _logger.LogError($"Skipping integration for VC ID {credential.VcId} due to invalid issuer signature.");
