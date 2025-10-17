@@ -21,6 +21,7 @@ public class DocumentService : IDocumentService
     private readonly IPresentationProcessingService _presentationProcessingService;
     private readonly IMapper _mapper;
     private readonly UaePassDbContext _dbContext;
+    private readonly ISignatureValidator _signatureValidator;
     private readonly string _documentStoragePath;
     private readonly string _uaePassSecret;
     private readonly string _partnerId;
@@ -29,7 +30,7 @@ public class DocumentService : IDocumentService
 
     public DocumentService(ILogger<DocumentService> logger, IConfiguration configuration, HttpClient httpClient,
     ICadesVerificationService cadesVerificationService, IPresentationProcessingService presentationProcessingService,
-    IMapper mapper, UaePassDbContext dbContext)
+    IMapper mapper, UaePassDbContext dbContext, ISignatureValidator signatureValidator)
     {
         _logger = logger;
         _httpClient = httpClient;
@@ -37,6 +38,7 @@ public class DocumentService : IDocumentService
         _presentationProcessingService = presentationProcessingService;
         _mapper = mapper;
         _dbContext = dbContext;
+        _signatureValidator = signatureValidator;
         _documentStoragePath = configuration["UAEPass:DocumentStoragePath"] ?? "uaepass_documents";
         _uaePassSecret = configuration["UAEPass:Secret"] ?? "7bbfde6064b01a3c8389bcb689a6ecae";
         _partnerId = configuration["UAEPass:PartnerId"] ?? "did:uae:eth:c76036545911b577d6383ad4b1f593ae8f7982a2";
@@ -264,17 +266,29 @@ public class DocumentService : IDocumentService
         // --- 3. Process Decoded Presentation Data (Inner Structure) ---
         List<DecodedPresentation> decodedPresentations = await _presentationProcessingService.ProcessSignedPresentation(model.SignedPresentation);
 
-        // --- 4. Verify Proof Object (Non-CAdES Citizen Signature within each presentation) ---
+        // --- 4. Perform main objects ECDSA signature verifications ---
         foreach (var presentation in decodedPresentations)
         {
-            bool isPresentationProofValid = await _presentationProcessingService.VerifyPresentationProof(presentation);
-            if (!isPresentationProofValid)
+            bool isPresentationValid = _signatureValidator.ValidateSignature(presentation.Id!, presentation.Proof!.PublicKeyBase58!, presentation.Proof.Signature!);
+            if (!isPresentationValid)
             {
-                _logger.LogWarning($"Presentation Proof verification failed for presentation subject: {presentation.PresentationSubject}");
-                throw new UaePassRequestException("Invalid Proof signature within presentation.");
+                _logger.LogWarning($"Presentation signature verification failed for presentation subject: {presentation.PresentationSubject}");
+                throw new UaePassRequestException("Invalid Presentation signature.");
             }
         }
-        _logger.LogInformation("All internal Presentation Proof signatures successfully verified.");
+        _logger.LogInformation("All Presentation signatures successfully verified.");
+
+        // // --- 4. Verify Proof Object (Non-CAdES Citizen Signature within each presentation) ---
+        // foreach (var presentation in decodedPresentations)
+        // {
+        //     bool isPresentationProofValid = await _presentationProcessingService.VerifyPresentationProof(presentation);
+        //     if (!isPresentationProofValid)
+        //     {
+        //         _logger.LogWarning($"Presentation Proof verification failed for presentation subject: {presentation.PresentationSubject}");
+        //         throw new UaePassRequestException("Invalid Proof signature within presentation.");
+        //     }
+        // }
+        // _logger.LogInformation("All internal Presentation Proof signatures successfully verified.");
 
         // --- 5. Integrate with Business Logic (now includes credential-level verification) ---
         await _presentationProcessingService.IntegratePresentationData(decodedPresentations, model.ProofOfPresentationRequestId);

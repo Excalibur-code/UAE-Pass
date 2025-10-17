@@ -23,6 +23,9 @@ namespace UAE_Pass_Poc.Models
         [JsonProperty("issuerSignature")]
         public string? IssuerSignature { get; set; } // CAdES signature of Issuer on hash of encodedCredential
 
+        [JsonProperty("credentialExpiryDate")]
+        public string? CredentialExpiryDate { get; set; }
+
         [JsonProperty("credentialAssuranceLevel")]
         public string? CredentialAssuranceLevel { get; set; }
 

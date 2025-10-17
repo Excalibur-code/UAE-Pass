@@ -24,7 +24,7 @@ public static class Extension
         services.AddScoped<IDocumentService, DocumentService>();
         services.AddScoped<ICadesVerificationService, CadesVerificationService>();
         services.AddScoped<IPresentationProcessingService, PresentationProcessingService>();
-        services.AddScoped<IDidResolutionService, DidResolutionService>();
+        services.AddScoped<ISignatureValidator, SignatureValidator>();
         services.AddScoped<HttpClient>();
 
         //Add Repositories in DI container

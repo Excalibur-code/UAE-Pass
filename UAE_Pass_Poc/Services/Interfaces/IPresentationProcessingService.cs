@@ -17,7 +17,7 @@ namespace UAE_Pass_Poc.Services.Interfaces
         /// </summary>
         /// <param name="decodedPresentation">The decoded presentation object.</param>
         /// <returns>True if the Proof is valid, false otherwise.</returns>
-        Task<bool> VerifyPresentationProof(DecodedPresentation decodedPresentation);
+        //Task<bool> VerifyPresentationProof(DecodedPresentation decodedPresentation);
 
         /// <summary>
         /// Verifies the CAdES signature of the Issuer on the encodedCredential within a specific Credential.
@@ -31,7 +31,7 @@ namespace UAE_Pass_Poc.Services.Interfaces
         /// </summary>
         /// <param name="credential">The credential object containing the vcId and Proof.</param>
         /// <returns>True if the credential's Proof is valid, false otherwise.</returns>
-        Task<bool> VerifyCredentialProof(Credential credential);
+        //Task<bool> VerifyCredentialProof(Credential credential);
 
         /// <summary>
         /// Integrates the verified presentation data into the application's business logic.

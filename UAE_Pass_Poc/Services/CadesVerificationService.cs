@@ -26,7 +26,7 @@ namespace UAE_Pass_Poc.Services
                 
                 //Step 2: Create SignedCms object and decode the signature
                 SignedCms signedCms = new SignedCms();
-                signedCms.Decode(signatureBytes);
+                signedCms.Decode(signatureBytes); // Parse signatureBytes structure and also populates SignerInfos collection using the SignerInfos property.
                 
                 //Step 3: Extract the data enveloped inside signature
                 byte[] contentBytes = signedCms.ContentInfo.Content;
@@ -38,12 +38,12 @@ namespace UAE_Pass_Poc.Services
                     {
                         try
                         {
-                            signerInfo.CheckSignature(true);
+                            signerInfo.CheckSignature(true); //true - only check the signature, do not validate the certificate chain. false - validate the certificate chain. create X509Chain object to pass custom chain policy. checks certificate purposes/key usages, and (depending on the environment) will consider revocation and trust anchor rules as part of chain build/validation.                          
                             validated = true;
 
                             _logger.LogInformation("Signature verified successfully.");
                         }
-                        catch (CryptographicException ex)
+                        catch (Exception ex)
                         {
                             _logger.LogWarning($"Signature verification failed: {ex.Message}");
                             validated = false;
