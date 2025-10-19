@@ -268,20 +268,22 @@ namespace UAE_Pass_Poc.Services
                         }
 
                         // 2. Verify Credential Proof (Issuer's vault signature on vcId)
-                        //bool isCredentialProofValid = await VerifyCredentialProof(credential);
-                        bool isCredentialProofValid = false; // Placeholder until implemented
-                        if (!isCredentialProofValid)
-                        {
-                            _logger.LogError($"Skipping integration for VC ID {credential.VcId} due to invalid credential proof.");
-                            continue;
-                        }
+                        // //bool isCredentialProofValid = await VerifyCredentialProof(credential);
+                        // bool isCredentialProofValid = false; // Placeholder until implemented
+                        // if (!isCredentialProofValid)
+                        // {
+                        //     _logger.LogError($"Skipping integration for VC ID {credential.VcId} due to invalid credential proof.");
+                        //     continue;
+                        // }
 
                         // 3. Validate Credential Status via Blockchain (proofOfIssuanceId)
                         // This would involve interacting with the Blockchain using proofOfIssuanceId
                         // Example: bool isActive = await _blockchainService.CheckCredentialStatus(credential.ProofOfIssuanceId);
                         // if (!isActive) { /* handle revoked credential */ }
                         _logger.LogInformation($"Credential status check for VC ID {credential.VcId} (conceptual).");
-
+                        
+                        // --- 3.1. Perform credential objects ECDSA signature verifications ---
+                        
 
                         // 4. Decode and Parse EncodedCredential (if present)
                         if (!string.IsNullOrEmpty(credential.EncodedCredential))
