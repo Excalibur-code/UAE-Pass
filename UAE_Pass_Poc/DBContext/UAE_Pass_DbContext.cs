@@ -123,6 +123,7 @@ public class UaePassDbContext : DbContext
             entity.Property(e => e.QrId).IsRequired(false);
             entity.Property(e => e.SignedPresentation).IsRequired(false);
             entity.Property(e => e.CitizenSignature).IsRequired(false);
+            entity.Property(e => e.IsPresentationValid).HasDefaultValue(false);
         });
 
         modelBuilder.Entity<ReceivePresentationResponse>(entity =>

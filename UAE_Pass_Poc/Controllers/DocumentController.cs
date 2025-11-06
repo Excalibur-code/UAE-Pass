@@ -74,7 +74,7 @@ namespace UAE_Pass_Poc.Controllers
         [HttpGet("getList-of-verified-attributes")]
         public async Task<ISuccessResult> GetListOfVerifiedAttributes()
         {
-            return ResponseResult.Success(await _documentService.GetListOfVerfiedAttributesAsync());
+            return ResponseResult.Success(await _documentService.GetListOfVerifiedAttributesAsync());
         }
     }
 }

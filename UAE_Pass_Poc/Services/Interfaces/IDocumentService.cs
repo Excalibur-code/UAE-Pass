@@ -61,5 +61,5 @@ public interface IDocumentService
     /// Get List of Verified Attributes to be passed as Presentation Request from UAE Pass.
     /// </summary>
     /// <returns></returns>
-    Task<List<VerifiedAttributesResponse>> GetListOfVerfiedAttributesAsync();
+    Task<List<VerifiedAttributesResponse>> GetListOfVerifiedAttributesAsync();
 }

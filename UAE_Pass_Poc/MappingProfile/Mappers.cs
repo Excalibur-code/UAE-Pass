@@ -18,6 +18,8 @@ namespace UAE_Pass_Poc.MappingProfile
             //Request Presentation Response Model to Entity
             CreateMap<Models.Response.RequestPresentationResponseModel, RequestPresentationResponseMapping>()
                 .ForMember(dest => dest.ProofOfPresentationId, opt => opt.MapFrom(src => src.ProofOfPresentationRequestId));
+
+            CreateMap<ReceivePresentationModel, ReceivePresentation>().ReverseMap();
         }
     }
 }

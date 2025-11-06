@@ -11,13 +11,16 @@ namespace UAE_Pass_Poc.Services
     {
         private readonly ILogger<PresentationProcessingService> _logger;
         private readonly ICadesVerificationService _cadesVerificationService;
+        private readonly ISignatureValidator _signatureValidator;
 
         public PresentationProcessingService(
             ILogger<PresentationProcessingService> logger,
-            ICadesVerificationService cadesVerificationService)
+            ICadesVerificationService cadesVerificationService,
+            ISignatureValidator signatureValidator)
         {
             _logger = logger;
             _cadesVerificationService = cadesVerificationService;
+            _signatureValidator = signatureValidator;
         }
 
         public async Task<List<DecodedPresentation>> ProcessSignedPresentation(List<string> signedPresentationBase64List)
@@ -237,7 +240,7 @@ namespace UAE_Pass_Poc.Services
         //     return await Task.FromResult(true);
         // }
 
-        public async Task IntegratePresentationData(List<DecodedPresentation> verifiedPresentations, string? requestId)
+        public async Task IntegratePresentationData(List<DecodedPresentation> verifiedPresentations, string? requestId, List<string> verifiableAttributes)
         {
             foreach (var presentation in verifiedPresentations)
             {
@@ -247,6 +250,12 @@ namespace UAE_Pass_Poc.Services
                 {
                     foreach (var credential in presentation.Credentials)
                     {
+                        if(credential.CredentialAssuranceLevel != "ISSUED" && verifiableAttributes.Contains(credential.CredentialDocumentType!))
+                        {
+                            _logger.LogInformation($"Skipping credential type: {credential.CredentialDocumentType} with assurance level: {credential.CredentialAssuranceLevel}");
+                            _logger.LogInformation("Skipping due to credential being self-attested/self-signed or not in verifiable attributes list.");
+                            continue;
+                        }
                         _logger.LogInformation($"Processing credential type: {credential.CredentialDocumentType}, VC ID: {credential.VcId}");
 
                         // 1. Verify Issuer Signature (CAdES)
@@ -264,7 +273,7 @@ namespace UAE_Pass_Poc.Services
                         if (!isIssuerSignatureValid)
                         {
                             _logger.LogError($"Skipping integration for VC ID {credential.VcId} due to invalid issuer signature.");
-                            continue; // Or throw an exception, depending on your error handling policy
+                            continue;
                         }
 
                         // 2. Verify Credential Proof (Issuer's vault signature on vcId)
@@ -283,57 +292,62 @@ namespace UAE_Pass_Poc.Services
                         _logger.LogInformation($"Credential status check for VC ID {credential.VcId} (conceptual).");
                         
                         // --- 3.1. Perform credential objects ECDSA signature verifications ---
-                        
+                        var isECDSASignatureValid = _signatureValidator.ValidateSignature(credential.VcId!, credential.Proof!.PublicKeyBase58!, credential.Proof.Signature!);
+                        if (!isECDSASignatureValid)
+                        {
+                            _logger.LogError($"Skipping integration for VC ID {credential.VcId} due to invalid ECDSA signature.");
+                            continue;
+                        }
 
                         // 4. Decode and Parse EncodedCredential (if present)
-                        if (!string.IsNullOrEmpty(credential.EncodedCredential))
-                        {
-                            byte[] innerDecodedBytes;
-                            try
-                            {
-                                innerDecodedBytes = Convert.FromBase64String(credential.EncodedCredential);
-                            }
-                            catch (FormatException ex)
-                            {
-                                _logger.LogError(ex, $"Invalid BASE64 format for inner encodedCredential in VC ID: {credential.VcId}");
-                                continue;
-                            }
+                        // if (!string.IsNullOrEmpty(credential.EncodedCredential))
+                        // {
+                        //     byte[] innerDecodedBytes;
+                        //     try
+                        //     {
+                        //         innerDecodedBytes = Convert.FromBase64String(credential.EncodedCredential);
+                        //     }
+                        //     catch (FormatException ex)
+                        //     {
+                        //         _logger.LogError(ex, $"Invalid BASE64 format for inner encodedCredential in VC ID: {credential.VcId}");
+                        //         continue;
+                        //     }
 
-                            string innerJsonString = Encoding.UTF8.GetString(innerDecodedBytes);
-                            _logger.LogDebug($"Decoded inner credential JSON for VC ID {credential.VcId}: {innerJsonString}");
+                        //     string innerJsonString = Encoding.UTF8.GetString(innerDecodedBytes);
+                        //     _logger.LogDebug($"Decoded inner credential JSON for VC ID {credential.VcId}: {innerJsonString}");
 
-                            // Now, parse this innerJsonString based on Section 8.1.1.1 for specific document types
-                            // You'll need a switch statement or a factory pattern here
-                            switch (credential.CredentialDocumentType)
-                            {
-                                case "EmiratesId":
-                                    // Example: var emiratesIdData = JsonConvert.DeserializeObject<EmiratesIdData>(innerJsonString);
-                                    // _logger.LogDebug($"Decoded Emirates ID data: {emiratesIdData?.IdNumber}");
-                                    // await _yourUserRepository.UpdateUserWithEmiratesId(emiratesIdData, presentation.PresentationSubject);
-                                    _logger.LogInformation($"Integrating EmiratesId data for VC ID: {credential.VcId} (conceptual).");
-                                    break;
-                                case "Passport":
-                                    // Example: var passportData = JsonConvert.DeserializeObject<PassportData>(innerJsonString);
-                                    // _logger.LogDebug($"Decoded Passport data: {passportData?.PassportNumber}");
-                                    _logger.LogInformation($"Integrating Passport data for VC ID: {credential.VcId} (conceptual).");
-                                    break;
-                                case "SalaryCertificate":
-                                    // If salary certificate also has encodedCredential (the example showed it without)
-                                    // Example: var salaryData = JsonConvert.DeserializeObject<SalaryData>(innerJsonString);
-                                    _logger.LogInformation($"Integrating SalaryCertificate data for VC ID: {credential.VcId} (conceptual).");
-                                    break;
-                                default:
-                                    _logger.LogWarning($"Unknown credentialDocumentType: {credential.CredentialDocumentType} for VC ID: {credential.VcId}. Skipping inner credential processing.");
-                                    break;
-                            }
-                        }
-                        else if (!string.IsNullOrEmpty(credential.DocumentName))
-                        {
-                            // This is likely a self-signed document without an encodedCredential
-                            _logger.LogDebug($"Processing self-signed document: {credential.DocumentName} for VC ID: {credential.VcId}");
-                            // You might retrieve evidence using urlToRetriveEvidence here
-                            _logger.LogInformation($"Integrating self-signed document data for VC ID: {credential.VcId} (conceptual).");
-                        }
+                        //     // Now, parse this innerJsonString based on Section 8.1.1.1 for specific document types
+                        //     // You'll need a switch statement or a factory pattern here
+                        //     switch (credential.CredentialDocumentType)
+                        //     {
+                        //         case "EmiratesId":
+                        //             // Example: var emiratesIdData = JsonConvert.DeserializeObject<EmiratesIdData>(innerJsonString);
+                        //             // _logger.LogDebug($"Decoded Emirates ID data: {emiratesIdData?.IdNumber}");
+                        //             // await _yourUserRepository.UpdateUserWithEmiratesId(emiratesIdData, presentation.PresentationSubject);
+                        //             _logger.LogInformation($"Integrating EmiratesId data for VC ID: {credential.VcId} (conceptual).");
+                        //             break;
+                        //         case "Passport":
+                        //             // Example: var passportData = JsonConvert.DeserializeObject<PassportData>(innerJsonString);
+                        //             // _logger.LogDebug($"Decoded Passport data: {passportData?.PassportNumber}");
+                        //             _logger.LogInformation($"Integrating Passport data for VC ID: {credential.VcId} (conceptual).");
+                        //             break;
+                        //         case "SalaryCertificate":
+                        //             // If salary certificate also has encodedCredential (the example showed it without)
+                        //             // Example: var salaryData = JsonConvert.DeserializeObject<SalaryData>(innerJsonString);
+                        //             _logger.LogInformation($"Integrating SalaryCertificate data for VC ID: {credential.VcId} (conceptual).");
+                        //             break;
+                        //         default:
+                        //             _logger.LogWarning($"Unknown credentialDocumentType: {credential.CredentialDocumentType} for VC ID: {credential.VcId}. Skipping inner credential processing.");
+                        //             break;
+                        //     }
+                        // }
+                        // else if (!string.IsNullOrEmpty(credential.DocumentName))
+                        // {
+                        //     // This is likely a self-signed document without an encodedCredential
+                        //     _logger.LogDebug($"Processing self-signed document: {credential.DocumentName} for VC ID: {credential.VcId}");
+                        //     // You might retrieve evidence using urlToRetriveEvidence here
+                        //     _logger.LogInformation($"Integrating self-signed document data for VC ID: {credential.VcId} (conceptual).");
+                        // }
                     }
                 }
 

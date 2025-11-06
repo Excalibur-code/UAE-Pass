@@ -39,6 +39,6 @@ namespace UAE_Pass_Poc.Services.Interfaces
         /// </summary>
         /// <param name="verifiedPresentations">A list of fully verified presentation objects.</param>
         /// <param name="requestId">The request ID associated with the presentation.</param>
-        Task IntegratePresentationData(List<DecodedPresentation> verifiedPresentations, string? requestId);
+        Task IntegratePresentationData(List<DecodedPresentation> verifiedPresentations, string? requestId, List<string> verifiableAttributes);
     }
 }

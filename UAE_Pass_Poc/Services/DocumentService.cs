@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AutoMapper;
+using Microsoft.EntityFrameworkCore;
 using UAE_Pass_Poc.DBContext;
 using UAE_Pass_Poc.Entities;
 using UAE_Pass_Poc.Enums;
@@ -43,7 +44,7 @@ public class DocumentService : IDocumentService
         _uaePassSecret = configuration["UAEPass:Secret"] ?? "7bbfde6064b01a3c8389bcb689a6ecae";
         _partnerId = configuration["UAEPass:PartnerId"] ?? "did:uae:eth:c76036545911b577d6383ad4b1f593ae8f7982a2";
         _baseUri = configuration["UAEPass:BaseUri"] ?? "https://papistage.dv.government.net.ae";
-        _accessCode = "461c43f6-f7e2-3055-9c6f-dde216c3549c";
+        _accessCode = "99255c75-e72e-35c4-a1bf-b67004e6be5c";
     }
 
     #region Presentation Request Status
@@ -236,6 +237,13 @@ public class DocumentService : IDocumentService
             throw new ArgumentException("CitizenSignature is mandatory.");
         }
 
+        var requestPresentationResponse = await _dbContext.RequestPresentationResponseMappings.Where(x => x.ProofOfPresentationId == model.ProofOfPresentationRequestId).FirstOrDefaultAsync();
+        if (requestPresentationResponse == null)
+        {
+            _logger.LogWarning("No matching RequestPresentationResponseMapping found for ProofOfPresentationRequestId: {ProofOfPresentationRequestId}", model.ProofOfPresentationRequestId);
+            throw new ArgumentException("Invalid ProofOfPresentationRequestId.");
+        }
+
         // --- 2. CAdES Verification of CitizenSignature (Outer Signature) ---
         // The CitizenSignature is on the SHA256 hash of the *entire* signedPresentation payload.
         // To get this, we need to concatenate the raw Base64 strings of SignedPresentation
@@ -249,7 +257,7 @@ public class DocumentService : IDocumentService
             hashOfCombinedSignedPresentation = sha256Hash.ComputeHash(combinedSignedPresentationBytes);
         }
         string hashHex = BitConverter.ToString(hashOfCombinedSignedPresentation).Replace("-", "").ToLowerInvariant();
-        _logger.LogDebug($"Calculated SHA256 Hash of combined SignedPresentation for CAdES: {hashHex}");
+        _logger.LogInformation($"Calculated SHA256 Hash of combined SignedPresentation for CAdES: {hashHex}");
 
         bool isCadesSignatureValid = _cadesVerificationService.ValidateCADESignature(
             model.CitizenSignature,
@@ -291,10 +299,27 @@ public class DocumentService : IDocumentService
         // _logger.LogInformation("All internal Presentation Proof signatures successfully verified.");
 
         // --- 5. Integrate with Business Logic (now includes credential-level verification) ---
-        await _presentationProcessingService.IntegratePresentationData(decodedPresentations, model.ProofOfPresentationRequestId);
+        var verifiableAttributes = await GetListOfVerifiedAttributesAsync();
+        await _presentationProcessingService.IntegratePresentationData(decodedPresentations, model.ProofOfPresentationRequestId, verifiableAttributes.Select(v => v.AttributeName!).ToList());
+
+        //Add request payload to db
+        var receivePresentationEntity = _mapper.Map<Entities.ReceivePresentation>(model);
+        receivePresentationEntity.IsPresentationValid = true;
+        await _dbContext.ReceivePresentations.AddAsync(receivePresentationEntity);
 
         // --- 6. Generate PresentationReceiptID ---
         string presentationReceiptId = Guid.NewGuid().ToString(); // Or generate based on your internal logic
+
+        //add data to db
+        var presentationResponseMapping = new Entities.ReceivePresentationResponse()
+        {
+            RequestPresentationId = requestPresentationResponse.RequestPresentationId,
+            ProofOfPresentationId = model.ProofOfPresentationId!,
+            ReceivePresentationId = receivePresentationEntity.Id,
+            PresentationReceiptId = presentationReceiptId
+        };
+        await _dbContext.ReceivePresentationResponses.AddAsync(presentationResponseMapping);
+        await _dbContext.SaveChangesAsync();
 
         _logger.LogInformation($"Successfully processed Presentation Request for RequestId: {model.ProofOfPresentationRequestId}. Generated Receipt ID: {presentationReceiptId}");
 
@@ -413,7 +438,82 @@ public class DocumentService : IDocumentService
 
         // ----- FOR EVIDENCE -----
         // -- NEED SOME CLARITY ON THIS STEP.
+        if (model.ProofOfPresentationId == null || string.IsNullOrWhiteSpace(model.ProofOfPresentationId))
+        {
+            _logger.LogError("ProofOfPresentationId is required in ReceiveVisualizationModel.");
+            throw new ArgumentException("Invalid ProofOfPresentationId.");
+        }
 
+        if (model.VcId == null || string.IsNullOrWhiteSpace(model.VcId))
+        {
+            _logger.LogError("VcId is required in ReceiveVisualizationModel.");
+            throw new ArgumentException("Invalid VcId.");
+        }
+
+        if (model.VisualizationInfo == null || string.IsNullOrWhiteSpace(model.VisualizationInfo))
+        {
+            _logger.LogError("VisualizationInfo is required in ReceiveVisualizationModel.");
+            throw new ArgumentException("Invalid VisualizationInfo.");
+        }
+
+        if (model.IssuerSignature == null || string.IsNullOrWhiteSpace(model.IssuerSignature))
+        {
+            _logger.LogError("IssuerSignature is required in ReceiveVisualizationModel.");
+            throw new ArgumentException("Invalid IssuerSignature.");
+        }
+        
+        byte[] visualizationInfoBytes = Encoding.UTF8.GetBytes(model.VisualizationInfo);
+        byte[] hashOfVisualizationInfo;
+
+        using (SHA256 sha256Hash = SHA256.Create())
+        {
+            hashOfVisualizationInfo = sha256Hash.ComputeHash(visualizationInfoBytes);
+        }
+        string hashHex = BitConverter.ToString(hashOfVisualizationInfo).Replace("-", "").ToLowerInvariant();
+        _logger.LogInformation($"Calculated SHA256 Hash of VisualizationInfo for CAdES: {hashHex}");
+
+        bool isCadesSignatureValid = _cadesVerificationService.ValidateCADESignature(
+            model.IssuerSignature,
+            hashHex
+        );
+
+        if (!isCadesSignatureValid)
+        {
+            _logger.LogWarning($"CAdES signature verification failed for VisualizationInfo with VcId: {model.VcId}");
+            throw new UaePassRequestException("Invalid IssuerSignature for VisualizationInfo.");
+        }
+
+        //Decode XML Data and Map to object
+        var visualizationInfoDecoded = VisualizationInfoDeserializer.FromBase64(model.VisualizationInfo);
+
+        //fetch the data received in the presentation api
+        var presentationData = await _dbContext.ReceivePresentations.FirstOrDefaultAsync(x => x.ProofOfPresentationId == model.ProofOfPresentationId && !x.Deleted);
+
+        var decodedSignedPresentations = await _presentationProcessingService.ProcessSignedPresentation(presentationData.SignedPresentation);
+        var isVisualizationInfoMatched = false;
+        foreach (var presentation in decodedSignedPresentations)
+        {
+            //considering they will be same.
+            var mappedCredential = presentation.Credentials.First(x => x.CredentialDocumentType == visualizationInfoDecoded.Claim.NameOfDocEn);
+
+            //map the mappedCredential's claim to visualization info's
+            //get the claims of credential object's encodedCredential
+            //mappedCredential.EncodedCredential == visualization info claim
+            var mappedCredentialsEncodedCredentialDecodedData = VisualizationInfoDeserializer.FromBase64(mappedCredential.EncodedCredential);
+            if (mappedCredentialsEncodedCredentialDecodedData == visualizationInfoDecoded)
+            {
+                isVisualizationInfoMatched = true;
+            }
+        }
+
+        if (isVisualizationInfoMatched)
+        {
+            //save the response in db alongwith document.
+        }
+        else
+        {
+            //return error
+        }
         return new VisualizationReceivedResponse()
         {
             EvidenceVisualizationReceiptID = Guid.NewGuid().ToString()
@@ -433,12 +533,13 @@ public class DocumentService : IDocumentService
         // 2. USER_EXITED – User is not proceed with the request. Even though user has an option to open UAEPASS application again and share the request if this is still active.
         // 3. UAEPASS_ERROR – There is an intermittent failure happened during the flow. User has an option to retry the sharing process and complete the journey.
         // (Intermittent failure)
+        
         return new RejectNotificationResponse() { PresentationRejectID = Guid.NewGuid().ToString() };
     }
     #endregion
 
-    #region Get List Of Verfied Attributes
-    public async Task<List<VerifiedAttributesResponse>> GetListOfVerfiedAttributesAsync()
+    #region Get List Of Verified Attributes
+    public async Task<List<VerifiedAttributesResponse>> GetListOfVerifiedAttributesAsync()
     {
         var url = $"{_baseUri}/papi/v1.0/verified-attributes?type=ALL";
         var request = new HttpRequestMessage(HttpMethod.Get, url);
