@@ -108,13 +108,11 @@ public class DocumentService : IDocumentService
     #region Request For Documents
     public async Task<RequestPresentationResponseModel> RequestPresentationAsync(RequestPresentationModel model)
     {
-        //to be setup internally.
         model.PartnerId = _partnerId;
         model.RequestId = "WASL" + DateTime.Now.ToString("yy") + "AE" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         _logger.LogInformation("Initiating Request Presentation process for RequestId: {RequestId}", model.RequestId);
 
-        //Step 1 - Validate the model.
         var (isValid, validationErrors) = ValidatePresentationRequest(model);
         if (!isValid && validationErrors != null && validationErrors.Any())
         {
@@ -122,13 +120,11 @@ public class DocumentService : IDocumentService
             throw new ArgumentException("Invalid request model", string.Join(", ", validationErrors));
         }
 
-        //Step 2 - Configure request
         var url = $"{_baseUri}/papi/v2/presentation-requests";
         var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Add("Authorization", $"Bearer {GenerateUAEPassAccessToken(_accessCode)}");
         request.Content = CreateJsonContent(model);
 
-        //Step 3 - Send request
         var response = await SendAsync<RequestPresentationResponseModel>(request);
         if (!response.IsSuccess)
         {
@@ -136,7 +132,6 @@ public class DocumentService : IDocumentService
             throw new UaePassRequestException($"Request For Presentation Failed with Message: {response.Message} and Code : {response.Code}");
         }
 
-        //Step 4 - Store payload & response in database.
         var requestPresentationEntity = _mapper.Map<Entities.RequestPresentation>(model);
         _dbContext.RequestPresentations.Add(requestPresentationEntity);
 
@@ -425,19 +420,6 @@ public class DocumentService : IDocumentService
     #region Receive Visualization - Webhook
     public async Task<VisualizationReceivedResponse> ReceiveVisualizationAsync(ReceiveVisualizationModel model)
     {
-        //NOTE - Visualization Info and Evidence Info must be persisted in system as an audit trail as well as for future disputes.
-        //Issuer Signature field for audit trail and future disputes.
-
-        // ----- FOR VISUALIZATION -----
-        //Step 1 - Validate the CAdES Signature.
-        //Step 1.1 - Take SHA256 hash of model.VisualizationInfo
-        //Step 1.2 - Unwrap data inside model.IssuerSignature using open DSS library -> Match both hash. they should match.
-
-        //Step 2 - Decode base64 of model.visualizationInfo to get actual visualization and data used to generate it.
-        //Step 2.1 - Match the data received here with the corresponding data received in the receive-presentation API.
-
-        // ----- FOR EVIDENCE -----
-        // -- NEED SOME CLARITY ON THIS STEP.
         if (model.ProofOfPresentationId == null || string.IsNullOrWhiteSpace(model.ProofOfPresentationId))
         {
             _logger.LogError("ProofOfPresentationId is required in ReceiveVisualizationModel.");
@@ -483,41 +465,67 @@ public class DocumentService : IDocumentService
             throw new UaePassRequestException("Invalid IssuerSignature for VisualizationInfo.");
         }
 
-        //Decode XML Data and Map to object
         var visualizationInfoDecoded = VisualizationInfoDeserializer.FromBase64(model.VisualizationInfo);
 
-        //fetch the data received in the presentation api
         var presentationData = await _dbContext.ReceivePresentations.FirstOrDefaultAsync(x => x.ProofOfPresentationId == model.ProofOfPresentationId && !x.Deleted);
+        if (presentationData == null)
+        {
+            _logger.LogError("No corresponding presentation data found for the ProofOfPresentationId: {proofOfPresentationId}", model.ProofOfPresentationId);
+            throw new BadRequestException("No corresponding presentation data found for the ProofOfPresentationId: {proofOfPresentationId}", model.ProofOfPresentationId);
+        }
 
-        var decodedSignedPresentations = await _presentationProcessingService.ProcessSignedPresentation(presentationData.SignedPresentation);
+        var decodedSignedPresentations = await _presentationProcessingService.ProcessSignedPresentation(presentationData.SignedPresentation!);
         var isVisualizationInfoMatched = false;
         foreach (var presentation in decodedSignedPresentations)
         {
-            //considering they will be same.
-            var mappedCredential = presentation.Credentials.First(x => x.CredentialDocumentType == visualizationInfoDecoded.Claim.NameOfDocEn);
+            var mappedCredential = presentation.Credentials?.Find(x => x.VcId == model.VcId);
+            if (string.IsNullOrWhiteSpace(mappedCredential?.EncodedCredential))
+            {
+                _logger.LogError("Encoded Credential missing in Presentation Data for the VcId : {vcId}", model.VcId);
+                throw new BadRequestException("Encoded Credential missing in Presentation Data for the VcId : {vcId}", model.VcId);
+            }
 
-            //map the mappedCredential's claim to visualization info's
-            //get the claims of credential object's encodedCredential
-            //mappedCredential.EncodedCredential == visualization info claim
             var mappedCredentialsEncodedCredentialDecodedData = VisualizationInfoDeserializer.FromBase64(mappedCredential.EncodedCredential);
-            if (mappedCredentialsEncodedCredentialDecodedData == visualizationInfoDecoded)
+            if (mappedCredentialsEncodedCredentialDecodedData.Claim == visualizationInfoDecoded.Claim)
             {
                 isVisualizationInfoMatched = true;
             }
         }
 
-        if (isVisualizationInfoMatched)
+        if (!isVisualizationInfoMatched)
         {
-            //save the response in db alongwith document.
+            _logger.LogError("The data from visualization did not match with the data from Presentation");
+            throw new BadRequestException("The data from visualization did not match with the data from Presentation");
         }
-        else
+        
+        var visualizationEntity = _mapper.Map<ReceiveVisualization>(model);
+        await _dbContext.ReceiveVisualizations.AddAsync(visualizationEntity);
+
+        var fileInfo = new VisualizationFile()
         {
-            //return error
-        }
-        return new VisualizationReceivedResponse()
+            File = visualizationInfoDecoded.Visualizations.InnerText,
+            FileName = visualizationInfoDecoded.Visualizations.Kind,
+            ProofOfPresentationId = model.ProofOfPresentationId,
+            VisualizationId = visualizationEntity.Id
+        };
+        await _dbContext.VisualizationFile.AddAsync(fileInfo);
+
+        await _dbContext.SaveChangesAsync();
+        
+        var response = new VisualizationReceivedResponse()
         {
             EvidenceVisualizationReceiptID = Guid.NewGuid().ToString()
         };
+        var responseEntity = new ReceiveVisualizationResponse()
+        {
+            ReceiveVisualizationId = visualizationEntity.Id,
+            EvidenceVisualizationReceiptID = response.EvidenceVisualizationReceiptID,
+            ReceivePresentationId = presentationData.Id,
+            ProofOfPresentationId = model.ProofOfPresentationId
+        };
+        await _dbContext.ReceiveVisualizationResponse.AddAsync(responseEntity);
+        await _dbContext.SaveChangesAsync();
+        return response;
     }
     #endregion
 

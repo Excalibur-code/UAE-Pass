@@ -25,7 +25,7 @@ public static class VisualizationInfoDeserializer
     public static VisualizationInfoData FromString(string xml)
     {
         var bytes = Encoding.UTF8.GetBytes(xml);
-        using var ms = new MemoryStream(bytes);
+        using var ms = new MemoryStream(bytes); 
         return FromStream(ms);
     }
 

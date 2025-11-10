@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using UAE_Pass_Poc.DBContext;
 
@@ -11,9 +12,11 @@ using UAE_Pass_Poc.DBContext;
 namespace UAE_Pass_Poc.Migrations
 {
     [DbContext(typeof(UaePassDbContext))]
-    partial class UaePassDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251110105355_ReceiveVisualizationEntityMig")]
+    partial class ReceiveVisualizationEntityMig
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -411,43 +414,6 @@ namespace UAE_Pass_Poc.Migrations
                         .HasName("PRIMARY");
 
                     b.ToTable("Users", (string)null);
-                });
-
-            modelBuilder.Entity("UAE_Pass_Poc.Entities.VisualizationFile", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<bool>("Deleted")
-                        .HasColumnType("bit");
-
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("File")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("ProofOfPresentationId")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid>("VisualizationId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("VisualizationFile", (string)null);
                 });
 
             modelBuilder.Entity("UAE_Pass_Poc.Entities.DocInstance", b =>

@@ -17,6 +17,10 @@ public class UaePassDbContext : DbContext
     public virtual DbSet<ReceivePresentationResponse> ReceivePresentationResponses { get; set; } = null!;
     public virtual DbSet<RequestPresentation> RequestPresentations { get; set; } = null!;
     public virtual DbSet<RequestPresentationResponseMapping> RequestPresentationResponseMappings { get; set; } = null!;
+    public virtual DbSet<ReceiveVisualization> ReceiveVisualizations { get; set; } = null!;
+    public virtual DbSet<ReceiveVisualizationResponse> ReceiveVisualizationResponse { get; set; } = null!;
+
+    public virtual DbSet<VisualizationFile> VisualizationFile { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -135,6 +139,40 @@ public class UaePassDbContext : DbContext
             entity.Property(e => e.PresentationReceiptId).IsRequired();
             entity.Property(e => e.RequestPresentationId).IsRequired();
             entity.Property(e => e.ProofOfPresentationId).IsRequired();
+        });
+
+        modelBuilder.Entity<ReceiveVisualization>(entity =>
+        {
+            entity.ToTable("ReceiveVisualization");
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.RequestId).IsRequired();
+            entity.Property(e => e.ProofOfPresentationId).IsRequired();
+            entity.Property(e => e.VCId).IsRequired();
+            entity.Property(e => e.FileType).IsRequired();
+            entity.Property(e => e.Status).IsRequired();
+        });
+
+        modelBuilder.Entity<ReceiveVisualizationResponse>(entity =>
+        {
+            entity.ToTable("ReceiveVisualizationResponse");
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.ReceiveVisualizationId).IsRequired();
+            entity.Property(e => e.EvidenceVisualizationReceiptID).IsRequired();
+            entity.Property(e => e.ReceivePresentationId).IsRequired();
+            entity.Property(e => e.ProofOfPresentationId).IsRequired();
+        });
+
+        modelBuilder.Entity<VisualizationFile>(entity =>
+        {
+            entity.ToTable("VisualizationFile");
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.File).IsRequired();
+            entity.Property(e => e.FileName).IsRequired();
+            entity.Property(e => e.ProofOfPresentationId).IsRequired();
+            entity.Property(e => e.VisualizationId).IsRequired();
         });
     }
 
