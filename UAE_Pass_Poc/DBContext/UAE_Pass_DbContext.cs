@@ -19,8 +19,8 @@ public class UaePassDbContext : DbContext
     public virtual DbSet<RequestPresentationResponseMapping> RequestPresentationResponseMappings { get; set; } = null!;
     public virtual DbSet<ReceiveVisualization> ReceiveVisualizations { get; set; } = null!;
     public virtual DbSet<ReceiveVisualizationResponse> ReceiveVisualizationResponse { get; set; } = null!;
-
     public virtual DbSet<VisualizationFile> VisualizationFile { get; set; }
+    public virtual DbSet<RejectNotification> RejectNotifications { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -173,6 +173,17 @@ public class UaePassDbContext : DbContext
             entity.Property(e => e.FileName).IsRequired();
             entity.Property(e => e.ProofOfPresentationId).IsRequired();
             entity.Property(e => e.VisualizationId).IsRequired();
+        });
+
+        modelBuilder.Entity<RejectNotification>(entity =>
+        {
+            entity.ToTable("RejectNotification");
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.ProofOfPresentationRequestId).IsRequired();
+            entity.Property(e => e.RejectReason).IsRequired();
+            entity.Property(e => e.PresentationRejectId).IsRequired();
+            entity.Property(e => e.RequestPresentationId).IsRequired();
         });
     }
 

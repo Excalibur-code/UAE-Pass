@@ -532,17 +532,41 @@ public class DocumentService : IDocumentService
     #region Reject Notification
     public async Task<RejectNotificationResponse> RejectNotificationAsync(RejectNotificationRequest model)
     {
-        //Match Proof Of Presentation Request ID from the DB
-        //If exists, then proceed.
-
         //1. USER_REJECTED –
         // User has intentionally rejected the sharing request. Service Provider has to mark the request complete and update as failure.
         // (Permanent failure)
         // 2. USER_EXITED – User is not proceed with the request. Even though user has an option to open UAEPASS application again and share the request if this is still active.
         // 3. UAEPASS_ERROR – There is an intermittent failure happened during the flow. User has an option to retry the sharing process and complete the journey.
         // (Intermittent failure)
-        
-        return new RejectNotificationResponse() { PresentationRejectID = Guid.NewGuid().ToString() };
+        var requestPresentationResponseMapping = await _dbContext.RequestPresentationResponseMappings.FirstOrDefaultAsync(x => x.ProofOfPresentationId == model.ProofOfPresentationRequestId);
+        if (requestPresentationResponseMapping is null)
+        {
+            _logger.LogError("No corresponding request found for the ProofOfPresentationRequestId: {proofOfPresentationId}", model.ProofOfPresentationRequestId);
+            throw new BadRequestException("No corresponding request found for the ProofOfPresentationRequestId: {proofOfPresentationId}", model.ProofOfPresentationRequestId);
+        }
+
+        var requestPresentationEntity = await _dbContext.RequestPresentations.FirstOrDefaultAsync(x => x.Id == requestPresentationResponseMapping.RequestPresentationId && !x.Deleted);
+        if (requestPresentationEntity is null)
+        {
+            _logger.LogError("No corresponding request found for the RequestPresentationId: {requestPresentationId}", requestPresentationResponseMapping.RequestPresentationId);
+            throw new BadRequestException("No corresponding request found for the RequestPresentationId: {requestPresentationId}", requestPresentationResponseMapping.RequestPresentationId.ToString());
+        }
+
+        requestPresentationEntity.Status = RequestStatus.REJECTED;
+        requestPresentationEntity.Message = model.RejectReason;
+        _dbContext.RequestPresentations.Update(requestPresentationEntity);
+
+        var rejectId = Guid.NewGuid();
+        await _dbContext.RejectNotifications.AddAsync(new RejectNotification()
+        {
+            ProofOfPresentationRequestId = model.ProofOfPresentationRequestId,
+            RejectReason = model.RejectReason,
+            RequestPresentationId = requestPresentationEntity.Id,
+            PresentationRejectId = rejectId
+        });
+
+        await _dbContext.SaveChangesAsync();
+        return new RejectNotificationResponse() { PresentationRejectID = rejectId.ToString() };
     }
     #endregion
 
