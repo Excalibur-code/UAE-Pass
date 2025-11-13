@@ -34,16 +34,12 @@ namespace UAE_Pass_Poc.Controllers
         [HttpPost("receive-presentation")]
         public async Task<ISuccessResult> ReceivePresentation([FromBody] ReceivePresentationModel request)
         {
-            //log the entire request object for debugging purpose
-            //log base64 data in a way to avoid data loss.
             return ResponseResult.Success(await _documentService.ReceivePresentationAsync(request));
         }
 
         [HttpPost("receive-visualization")]
         public async Task<ISuccessResult> ReceiveVisualization([FromBody] ReceiveVisualizationModel request)
         {
-            //log the entire request object for debugging purpose
-            //log base64 data in a way to avoid data loss.
             return ResponseResult.Success(await _documentService.ReceiveVisualizationAsync(request));
         }
 

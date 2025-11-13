@@ -8,6 +8,7 @@ using UAE_Pass_Poc.DBContext;
 using UAE_Pass_Poc.Entities;
 using UAE_Pass_Poc.Enums;
 using UAE_Pass_Poc.Exceptions;
+using UAE_Pass_Poc.Models;
 using UAE_Pass_Poc.Models.Request;
 using UAE_Pass_Poc.Models.Response;
 using UAE_Pass_Poc.Services.Interfaces;
@@ -281,6 +282,52 @@ public class DocumentService : IDocumentService
         }
         _logger.LogInformation("All Presentation signatures successfully verified.");
 
+        var credentials = decodedPresentations.SelectMany(x => x.Credentials ?? new List<Credential>()).ToList();
+        
+        //Internal Object CADeS verifications
+        foreach(var credential in credentials)
+        {
+            byte[] encodedCredentialBytes = Encoding.UTF8.GetBytes(credential.EncodedCredential!);
+            
+            byte[] hashOfEncodedCredential;
+            using (SHA256 sha256Hash = SHA256.Create()){
+                hashOfEncodedCredential = sha256Hash.ComputeHash(encodedCredentialBytes);
+            }
+
+            hashHex = BitConverter.ToString(hashOfEncodedCredential).Replace("-","").ToLowerInvariant();
+
+            isCadesSignatureValid = _cadesVerificationService.ValidateCADESignature(credential.IssuerSignature!, hashHex);
+
+            if(!isCadesSignatureValid){
+                _logger.LogWarning($"CAdES signature verification failed for RequestId: {credential.VcId}");
+            throw new UaePassRequestException("Invalid Credential Signature.");
+            }
+        }
+
+        //Internal Object ECDSA verification
+        foreach(var credential in credentials)
+        {
+            bool isCredentialECDSAValid = _signatureValidator.ValidateSignature(credential.VcId!, credential.Proof!.PublicKeyBase58!, credential.Proof.Signature!);
+            if(!isCredentialECDSAValid){
+                _logger.LogWarning("Credential ECDSA verificationfailed for the VcId : {vcId}", credential.VcId);
+                throw new UaePassRequestException("Invalid ECDSA signature");
+            }
+        }
+
+        //check status of every credential
+        foreach(var credential in credentials)
+        {
+            var response = GetCredentialStatusAsync(new CredentialStatusRequest(){
+                ProofOfPresentationId = model.ProofOfPresentationId!,
+                RequestId = requestPresentationResponse.RequestId,
+                ProofOfIssuanceId = credential.ProofOfIssuanceId!
+            });
+
+            if(response.Status.ToString().ToLower() != "active")
+            {
+                _logger.LogWarning("Credential with VcId : {vcId} is not active. Current status is: {currStat}", credential.VcId, response.Status);
+            }
+        } 
         // // --- 4. Verify Proof Object (Non-CAdES Citizen Signature within each presentation) ---
         // foreach (var presentation in decodedPresentations)
         // {
@@ -308,7 +355,7 @@ public class DocumentService : IDocumentService
         //add data to db
         var presentationResponseMapping = new Entities.ReceivePresentationResponse()
         {
-            RequestPresentationId = requestPresentationResponse.RequestPresentationId,
+            //RequestPresentationId = requestPresentationResponse.RequestPresentationId,
             ProofOfPresentationId = model.ProofOfPresentationId!,
             ReceivePresentationId = receivePresentationEntity.Id,
             PresentationReceiptId = presentationReceiptId
