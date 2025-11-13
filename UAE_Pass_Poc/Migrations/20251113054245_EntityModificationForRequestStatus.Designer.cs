@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using UAE_Pass_Poc.DBContext;
 
@@ -11,9 +12,11 @@ using UAE_Pass_Poc.DBContext;
 namespace UAE_Pass_Poc.Migrations
 {
     [DbContext(typeof(UaePassDbContext))]
-    partial class UaePassDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251113054245_EntityModificationForRequestStatus")]
+    partial class EntityModificationForRequestStatus
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
