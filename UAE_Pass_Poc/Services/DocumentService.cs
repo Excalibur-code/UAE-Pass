@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AutoMapper;
+using Azure.Core;
 using Microsoft.EntityFrameworkCore;
 using UAE_Pass_Poc.DBContext;
 using UAE_Pass_Poc.Entities;
@@ -24,7 +25,6 @@ public class DocumentService : IDocumentService
     private readonly IMapper _mapper;
     private readonly UaePassDbContext _dbContext;
     private readonly ISignatureValidator _signatureValidator;
-    private readonly string _documentStoragePath;
     private readonly string _uaePassSecret;
     private readonly string _partnerId;
     private readonly string _baseUri;
@@ -41,7 +41,6 @@ public class DocumentService : IDocumentService
         _mapper = mapper;
         _dbContext = dbContext;
         _signatureValidator = signatureValidator;
-        _documentStoragePath = configuration["UAEPass:DocumentStoragePath"] ?? "uaepass_documents";
         _uaePassSecret = configuration["UAEPass:Secret"] ?? "7bbfde6064b01a3c8389bcb689a6ecae";
         _partnerId = configuration["UAEPass:PartnerId"] ?? "did:uae:eth:c76036545911b577d6383ad4b1f593ae8f7982a2";
         _baseUri = configuration["UAEPass:BaseUri"] ?? "https://papistage.dv.government.net.ae";
@@ -336,6 +335,16 @@ public class DocumentService : IDocumentService
             PresentationReceiptId = presentationReceiptId
         };
         await _dbContext.ReceivePresentationResponses.AddAsync(presentationResponseMapping);
+
+        // --- 12. Update status
+        var requestPresentationEntity = await _dbContext.RequestPresentations.FirstOrDefaultAsync(x => x.Id == requestPresentationResponse.RequestPresentationId && !x.Deleted);
+        if(requestPresentationEntity is null)
+        {
+            _logger.LogError("Unable to find presentation request for RequestPresentationId: {requestPresentationId}", requestPresentationResponse.RequestPresentationId);
+            throw new UaePassRequestException($"Unable to find presentation request for RequestPresentationId: {requestPresentationResponse.RequestPresentationId}", "UNKNOWN_ERROR");
+        }
+        requestPresentationEntity.Status = RequestStatus.INPROGRESS;
+        _dbContext.RequestPresentations.Update(requestPresentationEntity);
         await _dbContext.SaveChangesAsync();
 
         _logger.LogInformation($"Successfully processed Presentation Request for RequestId: {model.ProofOfPresentationRequestId}. Generated Receipt ID: {presentationReceiptId}");
@@ -371,22 +380,17 @@ public class DocumentService : IDocumentService
         if (string.IsNullOrEmpty(accessCode))
             return string.Empty;
 
-        //setup
         var partnerId = _partnerId;
         var secret = _uaePassSecret;
-        //setup
 
-        // Current timestamp and expiration
         var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var expirationTime = currentTime + (expirationHours * 3600);
 
-        // JWT Header
         var header = new
         {
             alg = "HS512"
         };
 
-        // JWT Payload
         var payload = new
         {
             sub = accessCode,
@@ -395,29 +399,21 @@ public class DocumentService : IDocumentService
             exp = expirationTime
         };
 
-        // Serialize to JSON
         var headerJson = JsonSerializer.Serialize(header);
         var payloadJson = JsonSerializer.Serialize(payload);
 
-        // Base64 URL encode
         var headerBase64 = Base64UrlEncode(Encoding.UTF8.GetBytes(headerJson));
         var payloadBase64 = Base64UrlEncode(Encoding.UTF8.GetBytes(payloadJson));
 
-        // Create message to sign
         var message = $"{headerBase64}.{payloadBase64}";
 
-        // Generate HMAC-SHA512 signature
         var signature = GenerateHmacSha512Signature(message, secret);
         var signatureBase64 = Base64UrlEncode(signature);
 
-        // Return complete JWT token
         _logger.LogInformation("UAE Pass Access Token generated successfully.");
         return $"{headerBase64}.{payloadBase64}.{signatureBase64}";
     }
 
-    /// <summary>
-    /// Generates HMAC-SHA512 signature
-    /// </summary>
     private byte[] GenerateHmacSha512Signature(string message, string secret)
     {
         var keyBytes = Encoding.UTF8.GetBytes(secret);
@@ -429,9 +425,6 @@ public class DocumentService : IDocumentService
         }
     }
 
-    /// <summary>
-    /// Base64 URL encoding (without padding)
-    /// </summary>
     private string Base64UrlEncode(byte[] input)
     {
         var base64 = Convert.ToBase64String(input);
@@ -441,22 +434,17 @@ public class DocumentService : IDocumentService
                     .TrimEnd('=');
     }
 
-    /// <summary>
-    /// Base64 URL decoding
-    /// </summary>
-    private byte[] Base64UrlDecode(string input)
-    {
-        var base64 = input.Replace('-', '+').Replace('_', '/');
+    // private byte[] Base64UrlDecode(string input)
+    // {
+    //     var base64 = input.Replace('-', '+').Replace('_', '/');
+    //     switch (base64.Length % 4)
+    //     {
+    //         case 2: base64 += "=="; break;
+    //         case 3: base64 += "="; break;
+    //     }
 
-        // Add padding if needed
-        switch (base64.Length % 4)
-        {
-            case 2: base64 += "=="; break;
-            case 3: base64 += "="; break;
-        }
-
-        return Convert.FromBase64String(base64);
-    }
+    //     return Convert.FromBase64String(base64);
+    // }
     #endregion
 
     #region Receive Visualization - Webhook
@@ -567,7 +555,29 @@ public class DocumentService : IDocumentService
         };
         await _dbContext.ReceiveVisualizationResponse.AddAsync(responseEntity);
         await _dbContext.SaveChangesAsync();
+
+        await UpdatePresentationRequestAsync(model.ProofOfPresentationId);
         return response;
+    }
+
+    private async Task UpdatePresentationRequestAsync(string proofOfPresentationId)
+    {
+        var requestPresentationResponse = await _dbContext.RequestPresentationResponseMappings.FirstOrDefaultAsync(x => x.ProofOfPresentationId == proofOfPresentationId && !x.Deleted);
+        var requestPresentationEntity = await _dbContext.RequestPresentations.FirstOrDefaultAsync(x => x.Id == requestPresentationResponse!.RequestPresentationId && !x.Deleted);
+
+        if(requestPresentationEntity!.Status != RequestStatus.INPROGRESS_VISUALIZATION && requestPresentationEntity.Status == RequestStatus.INPROGRESS)
+        {
+            requestPresentationEntity.Status = RequestStatus.INPROGRESS_VISUALIZATION;
+        }
+
+        if(requestPresentationEntity.Status == RequestStatus.INPROGRESS_VISUALIZATION)
+        {
+            //check if all documents have been fetched.
+            //if yes, set the status to complete
+        }
+
+        _dbContext.RequestPresentations.Update(requestPresentationEntity);
+        await _dbContext.SaveChangesAsync();
     }
     #endregion
 
