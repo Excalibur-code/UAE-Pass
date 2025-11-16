@@ -45,7 +45,7 @@ public class DocumentService : IDocumentService
         _uaePassSecret = configuration["UAEPass:Secret"] ?? "7bbfde6064b01a3c8389bcb689a6ecae";
         _partnerId = configuration["UAEPass:PartnerId"] ?? "did:uae:eth:c76036545911b577d6383ad4b1f593ae8f7982a2";
         _baseUri = configuration["UAEPass:BaseUri"] ?? "https://papistage.dv.government.net.ae";
-        _accessCode = "99255c75-e72e-35c4-a1bf-b67004e6be5c";
+        _accessCode = "58651ccd-d7f0-3209-b8c1-404ece91598b";
     }
 
     #region Presentation Request Status
@@ -218,26 +218,26 @@ public class DocumentService : IDocumentService
          && string.IsNullOrEmpty(model.QrId))
         {
             _logger.LogWarning("Missing required identifiers in ReceivePresentationModel.");
-            throw new ArgumentException("One of ProofOfPresentationId, ProofOfPresentationRequestId, or QrId must be provided.");
+            throw new UaePassRequestException("One of ProofOfPresentationId, ProofOfPresentationRequestId, or QrId must be provided.", "INVALID_PRESENTATION");
         }
 
         if (model.SignedPresentation == null || !model.SignedPresentation.Any())
         {
             _logger.LogWarning("Missing SignedPresentation in ReceivePresentationModel.");
-            throw new ArgumentException("SignedPresentation is mandatory.");
+            throw new UaePassRequestException("SignedPresentation is mandatory.", "INVALID_PRESENTATION");
         }
 
         if (string.IsNullOrEmpty(model.CitizenSignature))
         {
             _logger.LogWarning("Missing CitizenSignature in ReceivePresentationModel.");
-            throw new ArgumentException("CitizenSignature is mandatory.");
+            throw new UaePassRequestException("CitizenSignature is mandatory.", "INVALID_PRESENTATION");
         }
 
         var requestPresentationResponse = await _dbContext.RequestPresentationResponseMappings.Where(x => x.ProofOfPresentationId == model.ProofOfPresentationRequestId).FirstOrDefaultAsync();
         if (requestPresentationResponse == null)
         {
             _logger.LogWarning("No matching RequestPresentationResponseMapping found for ProofOfPresentationRequestId: {ProofOfPresentationRequestId}", model.ProofOfPresentationRequestId);
-            throw new ArgumentException("Invalid ProofOfPresentationRequestId.");
+            throw new UaePassRequestException("Invalid ProofOfPresentationRequestId.", "INVALID_PRESENTATION");
         }
 
         // --- 2. CAdES Verification of CitizenSignature (Outer Signature) ---
@@ -245,25 +245,12 @@ public class DocumentService : IDocumentService
         // To get this, we need to concatenate the raw Base64 strings of SignedPresentation
         // and then hash that combined string.
         string combinedSignedPresentationString = string.Join("", model.SignedPresentation);
-        byte[] combinedSignedPresentationBytes = Encoding.UTF8.GetBytes(combinedSignedPresentationString);
-
-        byte[] hashOfCombinedSignedPresentation;
-        using (SHA256 sha256Hash = SHA256.Create())
-        {
-            hashOfCombinedSignedPresentation = sha256Hash.ComputeHash(combinedSignedPresentationBytes);
-        }
-        string hashHex = BitConverter.ToString(hashOfCombinedSignedPresentation).Replace("-", "").ToLowerInvariant();
-        _logger.LogInformation($"Calculated SHA256 Hash of combined SignedPresentation for CAdES: {hashHex}");
-
-        bool isCadesSignatureValid = _cadesVerificationService.ValidateCADESignature(
-            model.CitizenSignature,
-            hashHex
-        );
-
+        
+        bool isCadesSignatureValid = VerfiyCAdESSignature(model.CitizenSignature, combinedSignedPresentationString);
         if (!isCadesSignatureValid)
         {
-            _logger.LogWarning($"CAdES signature verification failed for RequestId: {model.ProofOfPresentationRequestId}");
-            throw new UaePassRequestException("Invalid CitizenSignature.");
+            _logger.LogWarning($"CAdES signature verification failed for Proof Of Pesentation Id: {model.ProofOfPresentationId}");
+            throw new UaePassRequestException("Invalid Signature.", "INVALID_SIGNATURE");
         }
         _logger.LogInformation("CAdES signature successfully verified.");
 
@@ -277,57 +264,45 @@ public class DocumentService : IDocumentService
             if (!isPresentationValid)
             {
                 _logger.LogWarning($"Presentation signature verification failed for presentation subject: {presentation.PresentationSubject}");
-                throw new UaePassRequestException("Invalid Presentation signature.");
+                throw new UaePassRequestException("Invalid Presentation signature.", "INVALID_SIGNATURE");
             }
         }
         _logger.LogInformation("All Presentation signatures successfully verified.");
 
         var credentials = decodedPresentations.SelectMany(x => x.Credentials ?? new List<Credential>()).ToList();
-        
-        //Internal Object CADeS verifications
-        foreach(var credential in credentials)
+
+        foreach (var credential in credentials)
         {
-            byte[] encodedCredentialBytes = Encoding.UTF8.GetBytes(credential.EncodedCredential!);
-            
-            byte[] hashOfEncodedCredential;
-            using (SHA256 sha256Hash = SHA256.Create()){
-                hashOfEncodedCredential = sha256Hash.ComputeHash(encodedCredentialBytes);
-            }
-
-            hashHex = BitConverter.ToString(hashOfEncodedCredential).Replace("-","").ToLowerInvariant();
-
-            isCadesSignatureValid = _cadesVerificationService.ValidateCADESignature(credential.IssuerSignature!, hashHex);
-
-            if(!isCadesSignatureValid){
-                _logger.LogWarning($"CAdES signature verification failed for RequestId: {credential.VcId}");
-            throw new UaePassRequestException("Invalid Credential Signature.");
-            }
-        }
-
-        //Internal Object ECDSA verification
-        foreach(var credential in credentials)
-        {
-            bool isCredentialECDSAValid = _signatureValidator.ValidateSignature(credential.VcId!, credential.Proof!.PublicKeyBase58!, credential.Proof.Signature!);
-            if(!isCredentialECDSAValid){
-                _logger.LogWarning("Credential ECDSA verificationfailed for the VcId : {vcId}", credential.VcId);
-                throw new UaePassRequestException("Invalid ECDSA signature");
-            }
-        }
-
-        //check status of every credential
-        foreach(var credential in credentials)
-        {
-            var response = GetCredentialStatusAsync(new CredentialStatusRequest(){
+            // --- 5. Check status of every credential ---
+            var response = GetCredentialStatusAsync(new CredentialStatusRequest()
+            {
                 ProofOfPresentationId = model.ProofOfPresentationId!,
                 RequestId = requestPresentationResponse.RequestId,
                 ProofOfIssuanceId = credential.ProofOfIssuanceId!
             });
 
-            if(response.Status.ToString().ToLower() != "active")
+            if (response.Status.ToString().ToLower() != "active")
             {
                 _logger.LogWarning("Credential with VcId : {vcId} is not active. Current status is: {currStat}", credential.VcId, response.Status);
             }
-        } 
+
+            // --- 6. Internal Object CADeS verifications ---
+            isCadesSignatureValid = VerfiyCAdESSignature(credential.IssuerSignature!, credential.EncodedCredential!);
+            if (!isCadesSignatureValid)
+            {
+                _logger.LogWarning($"CAdES signature verification failed for RequestId: {credential.VcId}");
+                throw new UaePassRequestException("Invalid CAdES Credential Signature.", "INVALID_SIGNATURE");
+            }
+
+            // --- 7. Internal Object ECDSA verification ---
+            bool isCredentialECDSAValid = _signatureValidator.ValidateSignature(credential.VcId!, credential.Proof!.PublicKeyBase58!, credential.Proof.Signature!);
+            if (!isCredentialECDSAValid)
+            {
+                _logger.LogWarning("Credential ECDSA verificationfailed for the VcId : {vcId}", credential.VcId);
+                throw new UaePassRequestException("Invalid ECDSA Credential signature", "INVALID_SIGNATURE");
+            }
+        }
+
         // // --- 4. Verify Proof Object (Non-CAdES Citizen Signature within each presentation) ---
         // foreach (var presentation in decodedPresentations)
         // {
@@ -340,22 +315,22 @@ public class DocumentService : IDocumentService
         // }
         // _logger.LogInformation("All internal Presentation Proof signatures successfully verified.");
 
-        // --- 5. Integrate with Business Logic (now includes credential-level verification) ---
+        // --- 8. Integrate with Business Logic (now includes credential-level verification) ---
         var verifiableAttributes = await GetListOfVerifiedAttributesAsync();
         await _presentationProcessingService.IntegratePresentationData(decodedPresentations, model.ProofOfPresentationRequestId, verifiableAttributes.Select(v => v.AttributeName!).ToList());
 
-        //Add request payload to db
+        // --- 9. Add request payload to db. ---
         var receivePresentationEntity = _mapper.Map<Entities.ReceivePresentation>(model);
         receivePresentationEntity.IsPresentationValid = true;
         await _dbContext.ReceivePresentations.AddAsync(receivePresentationEntity);
 
-        // --- 6. Generate PresentationReceiptID ---
+        // --- 10. Generate PresentationReceiptID ---
         string presentationReceiptId = Guid.NewGuid().ToString(); // Or generate based on your internal logic
 
-        //add data to db
+        // --- 11. Add data to db ---
         var presentationResponseMapping = new Entities.ReceivePresentationResponse()
         {
-            //RequestPresentationId = requestPresentationResponse.RequestPresentationId,
+            RequestPresentationId = requestPresentationResponse.RequestPresentationId,
             ProofOfPresentationId = model.ProofOfPresentationId!,
             ReceivePresentationId = receivePresentationEntity.Id,
             PresentationReceiptId = presentationReceiptId
@@ -366,6 +341,26 @@ public class DocumentService : IDocumentService
         _logger.LogInformation($"Successfully processed Presentation Request for RequestId: {model.ProofOfPresentationRequestId}. Generated Receipt ID: {presentationReceiptId}");
 
         return new PresentationReceiveResponse { PresentationReceiptID = presentationReceiptId };
+    }
+
+    private bool VerfiyCAdESSignature(string signature, string combinedSignedPresentationString)
+    {
+        byte[] combinedSignedPresentationBytes = Encoding.UTF8.GetBytes(combinedSignedPresentationString);
+
+        byte[] hashOfCombinedSignedPresentation;
+        using (SHA256 sha256Hash = SHA256.Create())
+        {
+            hashOfCombinedSignedPresentation = sha256Hash.ComputeHash(combinedSignedPresentationBytes);
+        }
+        string hashHex = BitConverter.ToString(hashOfCombinedSignedPresentation).Replace("-", "").ToLowerInvariant();
+        _logger.LogInformation($"Calculated SHA256 Hash of combined SignedPresentation for CAdES: {hashHex}");
+
+        bool isCadesSignatureValid = _cadesVerificationService.ValidateCADESignature(
+            signature,
+            hashHex
+        );
+
+        return isCadesSignatureValid;
     }
     #endregion
 
@@ -470,25 +465,25 @@ public class DocumentService : IDocumentService
         if (model.ProofOfPresentationId == null || string.IsNullOrWhiteSpace(model.ProofOfPresentationId))
         {
             _logger.LogError("ProofOfPresentationId is required in ReceiveVisualizationModel.");
-            throw new ArgumentException("Invalid ProofOfPresentationId.");
+            throw new UaePassRequestException("Invalid ProofOfPresentationId.", "INVALID_PROOF_OF_PRESENTATION");
         }
 
         if (model.VcId == null || string.IsNullOrWhiteSpace(model.VcId))
         {
             _logger.LogError("VcId is required in ReceiveVisualizationModel.");
-            throw new ArgumentException("Invalid VcId.");
+            throw new UaePassRequestException("Invalid VcId.", "UNKNOWN_ERROR");
         }
 
         if (model.VisualizationInfo == null || string.IsNullOrWhiteSpace(model.VisualizationInfo))
         {
             _logger.LogError("VisualizationInfo is required in ReceiveVisualizationModel.");
-            throw new ArgumentException("Invalid VisualizationInfo.");
+            throw new UaePassRequestException("Invalid VisualizationInfo.", "UNKNOWN_ERROR");
         }
 
         if (model.IssuerSignature == null || string.IsNullOrWhiteSpace(model.IssuerSignature))
         {
             _logger.LogError("IssuerSignature is required in ReceiveVisualizationModel.");
-            throw new ArgumentException("Invalid IssuerSignature.");
+            throw new UaePassRequestException("Invalid IssuerSignature.", "UNKNOWN_ERROR");
         }
         
         byte[] visualizationInfoBytes = Encoding.UTF8.GetBytes(model.VisualizationInfo);
@@ -509,7 +504,7 @@ public class DocumentService : IDocumentService
         if (!isCadesSignatureValid)
         {
             _logger.LogWarning($"CAdES signature verification failed for VisualizationInfo with VcId: {model.VcId}");
-            throw new UaePassRequestException("Invalid IssuerSignature for VisualizationInfo.");
+            throw new UaePassRequestException("Invalid IssuerSignature for VisualizationInfo.", "UNKNOWN_ERROR");
         }
 
         var visualizationInfoDecoded = VisualizationInfoDeserializer.FromBase64(model.VisualizationInfo);
@@ -518,7 +513,7 @@ public class DocumentService : IDocumentService
         if (presentationData == null)
         {
             _logger.LogError("No corresponding presentation data found for the ProofOfPresentationId: {proofOfPresentationId}", model.ProofOfPresentationId);
-            throw new BadRequestException("No corresponding presentation data found for the ProofOfPresentationId: {proofOfPresentationId}", model.ProofOfPresentationId);
+            throw new UaePassRequestException($"No corresponding presentation data found for the ProofOfPresentationId: {model.ProofOfPresentationId}", "UNKNOWN_ERROR");
         }
 
         var decodedSignedPresentations = await _presentationProcessingService.ProcessSignedPresentation(presentationData.SignedPresentation!);
@@ -529,7 +524,7 @@ public class DocumentService : IDocumentService
             if (string.IsNullOrWhiteSpace(mappedCredential?.EncodedCredential))
             {
                 _logger.LogError("Encoded Credential missing in Presentation Data for the VcId : {vcId}", model.VcId);
-                throw new BadRequestException("Encoded Credential missing in Presentation Data for the VcId : {vcId}", model.VcId);
+                throw new UaePassRequestException($"Encoded Credential missing in Presentation Data for the VcId : {model.VcId}", "UNKNOWN_ERROR");
             }
 
             var mappedCredentialsEncodedCredentialDecodedData = VisualizationInfoDeserializer.FromBase64(mappedCredential.EncodedCredential);
@@ -542,7 +537,7 @@ public class DocumentService : IDocumentService
         if (!isVisualizationInfoMatched)
         {
             _logger.LogError("The data from visualization did not match with the data from Presentation");
-            throw new BadRequestException("The data from visualization did not match with the data from Presentation");
+            throw new UaePassRequestException("The data from visualization did not match with the data from Presentation", "UNKNOWN_ERROR");
         }
         
         var visualizationEntity = _mapper.Map<ReceiveVisualization>(model);
@@ -589,14 +584,14 @@ public class DocumentService : IDocumentService
         if (requestPresentationResponseMapping is null)
         {
             _logger.LogError("No corresponding request found for the ProofOfPresentationRequestId: {proofOfPresentationId}", model.ProofOfPresentationRequestId);
-            throw new BadRequestException("No corresponding request found for the ProofOfPresentationRequestId: {proofOfPresentationId}", model.ProofOfPresentationRequestId);
+            throw new UaePassRequestException($"No corresponding request found for the ProofOfPresentationRequestId: {model.ProofOfPresentationRequestId}", "INVALID_PROOF_OF_PRESENTATION_REQUEST");
         }
 
         var requestPresentationEntity = await _dbContext.RequestPresentations.FirstOrDefaultAsync(x => x.Id == requestPresentationResponseMapping.RequestPresentationId && !x.Deleted);
         if (requestPresentationEntity is null)
         {
             _logger.LogError("No corresponding request found for the RequestPresentationId: {requestPresentationId}", requestPresentationResponseMapping.RequestPresentationId);
-            throw new BadRequestException("No corresponding request found for the RequestPresentationId: {requestPresentationId}", requestPresentationResponseMapping.RequestPresentationId.ToString());
+            throw new UaePassRequestException("No corresponding request found for the RequestPresentationId: {requestPresentationId}", requestPresentationResponseMapping.RequestPresentationId.ToString());
         }
 
         requestPresentationEntity.Status = RequestStatus.REJECTED;
